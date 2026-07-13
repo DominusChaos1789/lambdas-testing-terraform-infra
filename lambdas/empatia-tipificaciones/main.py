@@ -1,3 +1,13 @@
+"""S3 -> SQS driven forwarder for call transcriptions.
+
+A file dropped in the landing bucket (via Accenture's S3 replication) triggers
+an EventBridge "Object Created" event that is buffered in SQS and delivered to
+this Lambda. The object key's first path segment identifies the client
+(e.g. ``banco_occ/2026/07/13/call-123.json``). Per-client routing and shared
+Keycloak credentials are resolved from SSM Parameter Store, so onboarding a new
+endpoint is config-only -- no code change or redeploy.
+"""
+
 import json
 import os
 import time
@@ -5,31 +15,40 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-KEYCLOAK_TOKEN_URL = os.environ.get(
-    "KEYCLOAK_TOKEN_URL",
-    "https://login-server-staging.nexabpo.com/auth/realms/nexa/protocol/"
-    "openid-connect/token",
-)
-EMPATIA_API_URL = os.environ.get(
-    "EMPATIA_API_URL",
-    "https://nexa-empatia-staging.nexabpo.com/transcription/api/tipificaciones/b_occ",
-)
-CLIENT_ID = os.environ["CLIENT_ID"]
-CLIENT_SECRET = os.environ["CLIENT_SECRET"]
+import boto3
 
-REQUIRED_FIELDS = [
-    "idCall",
-    "callId",
-    "documento",
-    "primerNombre",
-    "primerApellido",
-    "tipoPersona",
-    "tipoDocumento",
-    "transcripcion",
-    "fechaInicio",
-]
+ENV = os.environ.get("ENV", "dev")
+SSM_PREFIX = os.environ.get("SSM_PREFIX", f"/nexa/empatia/{ENV}")
+KEYCLOAK_PARAM = os.environ.get("KEYCLOAK_PARAM", f"{SSM_PREFIX}/keycloak")
+CLIENTS_PREFIX = os.environ.get("CLIENTS_PREFIX", f"{SSM_PREFIX}/clients")
+CONFIG_TTL = int(os.environ.get("CONFIG_TTL_SECONDS", "300"))
+
+_ssm = boto3.client("ssm")
+_s3 = boto3.client("s3")
 
 _token_cache = {"access_token": None, "expires_at": 0}
+_config_cache = {}  # param name -> (parsed_value, expires_at)
+
+
+def _get_json_param(name, with_decryption=False):
+    """Fetch and parse a JSON SSM parameter, cached in-memory for CONFIG_TTL."""
+    now = time.time()
+    cached = _config_cache.get(name)
+    if cached and now < cached[1]:
+        return cached[0]
+
+    resp = _ssm.get_parameter(Name=name, WithDecryption=with_decryption)
+    value = json.loads(resp["Parameter"]["Value"])
+    _config_cache[name] = (value, now + CONFIG_TTL)
+    return value
+
+
+def _get_keycloak_config():
+    return _get_json_param(KEYCLOAK_PARAM, with_decryption=True)
+
+
+def _get_client_config(client_key):
+    return _get_json_param(f"{CLIENTS_PREFIX}/{client_key}", with_decryption=False)
 
 
 def _get_access_token():
@@ -37,31 +56,37 @@ def _get_access_token():
     if _token_cache["access_token"] and now < _token_cache["expires_at"]:
         return _token_cache["access_token"]
 
+    cfg = _get_keycloak_config()
     data = urllib.parse.urlencode(
         {
-            "client_id": CLIENT_ID,
-            "client_secret": CLIENT_SECRET,
+            "client_id": cfg["client_id"],
+            "client_secret": cfg["client_secret"],
             "grant_type": "client_credentials",
         }
     ).encode("utf-8")
 
     req = urllib.request.Request(
-        KEYCLOAK_TOKEN_URL,
+        cfg["token_url"],
         data=data,
         headers={"Content-Type": "application/x-www-form-urlencoded"},
         method="POST",
     )
     with urllib.request.urlopen(req, timeout=10) as resp:
-        token_body = json.loads(resp.read().decode("utf-8"))
+        body = json.loads(resp.read().decode("utf-8"))
 
-    _token_cache["access_token"] = token_body["access_token"]
-    _token_cache["expires_at"] = now + int(token_body.get("expires_in", 300)) - 30
+    _token_cache["access_token"] = body["access_token"]
+    _token_cache["expires_at"] = now + int(body.get("expires_in", 300)) - 30
     return _token_cache["access_token"]
 
 
-def _call_empatia(payload, access_token):
+def _post_transcription(client_cfg, payload, access_token):
+    url = (
+        client_cfg["api_base_url"].rstrip("/")
+        + "/"
+        + client_cfg["endpoint_path"].lstrip("/")
+    )
     req = urllib.request.Request(
-        EMPATIA_API_URL,
+        url,
         data=json.dumps(payload).encode("utf-8"),
         headers={
             "Content-Type": "application/json",
@@ -71,43 +96,73 @@ def _call_empatia(payload, access_token):
     )
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
-            return resp.status, json.loads(resp.read().decode("utf-8") or "{}")
+            return resp.status, resp.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
-        error_body = exc.read().decode("utf-8")
-        try:
-            return exc.code, json.loads(error_body or "{}")
-        except json.JSONDecodeError:
-            return exc.code, {"error": error_body}
+        return exc.code, exc.read().decode("utf-8")
+
+
+def _client_key_from_object_key(object_key):
+    """First path segment of the S3 key identifies the client/endpoint."""
+    return object_key.split("/", 1)[0]
+
+
+def _read_s3_json(bucket, key):
+    obj = _s3.get_object(Bucket=bucket, Key=key)
+    return json.loads(obj["Body"].read().decode("utf-8"))
+
+
+def _iter_s3_events(sqs_body):
+    """Yield (bucket, key) pairs from an SQS message body.
+
+    Supports both the EventBridge "Object Created" shape and the native S3
+    notification shape, so the wiring can change without touching the Lambda.
+    """
+    data = json.loads(sqs_body)
+
+    detail = data.get("detail")
+    if detail and "bucket" in detail and "object" in detail:
+        key = urllib.parse.unquote_plus(detail["object"]["key"])
+        yield detail["bucket"]["name"], key
+        return
+
+    for record in data.get("Records", []):
+        s3_event = record.get("s3")
+        if s3_event:
+            key = urllib.parse.unquote_plus(s3_event["object"]["key"])
+            yield s3_event["bucket"]["name"], key
+
+
+def _process_object(bucket, key):
+    client_key = _client_key_from_object_key(key)
+    client_cfg = _get_client_config(client_key)
+
+    if not client_cfg.get("enabled", True):
+        print(f"Client '{client_key}' disabled, skipping s3://{bucket}/{key}")
+        return
+
+    payload = _read_s3_json(bucket, key)
+    token = _get_access_token()
+    status, body = _post_transcription(client_cfg, payload, token)
+
+    if status >= 400:
+        raise RuntimeError(f"API {status} for s3://{bucket}/{key}: {body}")
+    print(f"Forwarded s3://{bucket}/{key} to '{client_key}' -> {status}")
 
 
 def lambda_handler(event, context):
-    body = event.get("body") if isinstance(event, dict) else None
-    if isinstance(body, str):
-        body = json.loads(body) if body else {}
-    elif body is None:
-        body = event if isinstance(event, dict) else {}
+    """SQS batch handler with partial-batch-failure reporting."""
+    failures = []
+    for record in event.get("Records", []):
+        message_id = record.get("messageId")
+        try:
+            for bucket, key in _iter_s3_events(record["body"]):
+                if not key.endswith(".json"):
+                    print(f"Ignoring non-JSON object s3://{bucket}/{key}")
+                    continue
+                _process_object(bucket, key)
+        except Exception as exc:  # noqa: BLE001 - surface any failure to SQS retry
+            print(f"Failed message {message_id}: {exc}")
+            if message_id:
+                failures.append({"itemIdentifier": message_id})
 
-    missing = [field for field in REQUIRED_FIELDS if field not in body]
-    if missing:
-        return {
-            "statusCode": 400,
-            "body": json.dumps({"error": f"Campos faltantes: {', '.join(missing)}"}),
-        }
-
-    try:
-        access_token = _get_access_token()
-    except Exception as exc:
-        return {
-            "statusCode": 502,
-            "body": json.dumps(
-                {"error": "No se pudo obtener el token de Keycloak", "detail": str(exc)}
-            ),
-        }
-
-    status, response_body = _call_empatia(body, access_token)
-
-    return {
-        "statusCode": status,
-        "headers": {"Content-Type": "application/json"},
-        "body": json.dumps(response_body),
-    }
+    return {"batchItemFailures": failures}

@@ -1,10 +1,18 @@
 {
-  "resource": "/tipificaciones",
-  "path": "/tipificaciones",
-  "httpMethod": "POST",
-  "headers": {
-    "Content-Type": "application/json"
-  },
-  "body": "{\"idCall\": \"99901110121647\", \"callId\": \"10000033\", \"documento\": \"1063228193\", \"primerNombre\": \"NICOLASS\", \"primerApellido\": \"HERRERA\", \"tipoPersona\": \"Natural\", \"tipoDocumento\": \"CC\", \"transcripcion\": \"# Conversacion de Soporte - Banco de Occidente\\n\\n**Cliente:** Hola, buenos dias. Necesito ayuda urgente. No puedo ingresar a mi aplicativo.\\n\\n**Agente:** Buenos dias. Bienvenido al soporte de Banco de Occidente. Lamento el inconveniente. Cual es el mensaje de error?\\n\\n**Cliente:** Dice Usuario o contrasena incorrectos.\\n\\n**Agente:** Entiendo, voy a desbloquear su cuenta. Cual es su numero de cedula?\\n\\n**Cliente:** Es 1.052.345.678.\\n\\n**Agente:** Listo, acabo de desbloquear su cuenta.\\n\\n**Cliente:** Excelente, muchas gracias!\\n\\n**Agente:** De nada, que tenga un excelente dia!\", \"fechaInicio\": \"08/07/2026 10:37:00\"}",
-  "isBase64Encoded": false
+  "Records": [
+    {
+      "messageId": "11d6ee51-4cc7-4302-9e22-7cd8afdaadf5",
+      "receiptHandle": "AQEB...",
+      "body": "{\"version\":\"0\",\"id\":\"6a7e8feb-b491-4cf7-a9f1-bf3703467718\",\"detail-type\":\"Object Created\",\"source\":\"aws.s3\",\"account\":\"111122223333\",\"region\":\"us-east-1\",\"time\":\"2026-07-13T10:37:00Z\",\"detail\":{\"version\":\"0\",\"bucket\":{\"name\":\"augusta-nexa-dev-providers-landing\"},\"object\":{\"key\":\"banco_occ/2026/07/13/call-99901110121647.json\",\"size\":2048,\"etag\":\"a1b2c3d4\"},\"reason\":\"PutObject\"}}",
+      "attributes": {
+        "ApproximateReceiveCount": "1",
+        "SentTimestamp": "1752403020000"
+      },
+      "messageAttributes": {},
+      "md5OfBody": "0000",
+      "eventSource": "aws:sqs",
+      "eventSourceARN": "arn:aws:sqs:us-east-1:111122223333:nexa-empatia-dev-transcriptions",
+      "awsRegion": "us-east-1"
+    }
+  ]
 }

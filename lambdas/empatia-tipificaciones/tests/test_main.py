@@ -3,19 +3,39 @@ import time
 import urllib.error
 from io import BytesIO
 
+import pytest
+
 import main
 
-VALID_PAYLOAD = {
-    "idCall": "99901110121647",
-    "callId": "10000033",
-    "documento": "1063228193",
-    "primerNombre": "NICOLASS",
-    "primerApellido": "HERRERA",
-    "tipoPersona": "Natural",
-    "tipoDocumento": "CC",
-    "transcripcion": "hola",
-    "fechaInicio": "08/07/2026 10:37:00",
+KEYCLOAK_CFG = {
+    "token_url": "https://login.example.com/token",
+    "client_id": "Connection.Apis.Auth",
+    "client_secret": "s3cr3t",
 }
+CLIENT_CFG = {
+    "api_base_url": "https://api.example.com/transcription/api/tipificaciones",
+    "endpoint_path": "b_occ",
+    "enabled": True,
+}
+TRANSCRIPTION = {"idCall": "123", "documento": "1063228193"}
+
+
+class FakeSSM:
+    def __init__(self, params):
+        self.params = params
+        self.calls = []
+
+    def get_parameter(self, Name, WithDecryption=False):
+        self.calls.append((Name, WithDecryption))
+        return {"Parameter": {"Value": self.params[Name]}}
+
+
+class FakeS3:
+    def __init__(self, objects):
+        self.objects = objects
+
+    def get_object(self, Bucket, Key):
+        return {"Body": BytesIO(self.objects[(Bucket, Key)])}
 
 
 class FakeResponse:
@@ -33,13 +53,9 @@ class FakeResponse:
         return False
 
 
-def json_response(status, payload):
-    return FakeResponse(status, json.dumps(payload).encode("utf-8"))
-
-
 def http_error(code, body_bytes):
     return urllib.error.HTTPError(
-        url="https://example.com",
+        url="https://api.example.com",
         code=code,
         msg="error",
         hdrs=None,
@@ -47,115 +63,204 @@ def http_error(code, body_bytes):
     )
 
 
+@pytest.fixture
+def ssm(monkeypatch):
+    fake = FakeSSM(
+        {
+            f"{main.CLIENTS_PREFIX}/banco_occ": json.dumps(CLIENT_CFG),
+            main.KEYCLOAK_PARAM: json.dumps(KEYCLOAK_CFG),
+        }
+    )
+    monkeypatch.setattr(main, "_ssm", fake)
+    return fake
+
+
+@pytest.fixture
+def s3(monkeypatch):
+    fake = FakeS3(
+        {
+            ("bucket", "banco_occ/2026/07/13/call.json"): json.dumps(
+                TRANSCRIPTION
+            ).encode()
+        }
+    )
+    monkeypatch.setattr(main, "_s3", fake)
+    return fake
+
+
+def eventbridge_body(bucket="bucket", key="banco_occ/2026/07/13/call.json"):
+    return json.dumps(
+        {
+            "detail-type": "Object Created",
+            "source": "aws.s3",
+            "detail": {"bucket": {"name": bucket}, "object": {"key": key}},
+        }
+    )
+
+
+# ---------------------------------------------------------------------------
+# SSM parameter caching
+# ---------------------------------------------------------------------------
+
+
+def test_get_json_param_caches(ssm):
+    first = main._get_client_config("banco_occ")
+    second = main._get_client_config("banco_occ")
+
+    assert first == CLIENT_CFG
+    assert second == CLIENT_CFG
+    assert len(ssm.calls) == 1  # second call served from cache
+
+
+def test_get_json_param_refetches_after_ttl(ssm, monkeypatch):
+    monkeypatch.setattr(main, "CONFIG_TTL", 0)
+    main._get_client_config("banco_occ")
+    main._get_client_config("banco_occ")
+
+    assert len(ssm.calls) == 2
+
+
+def test_keycloak_config_requested_with_decryption(ssm):
+    main._get_keycloak_config()
+    assert (main.KEYCLOAK_PARAM, True) in ssm.calls
+
+
 # ---------------------------------------------------------------------------
 # _get_access_token
 # ---------------------------------------------------------------------------
 
 
-def test_get_access_token_fetches_and_caches(monkeypatch):
-    requests_made = []
+def test_get_access_token_fetches_and_caches(ssm, monkeypatch):
+    calls = []
 
     def fake_urlopen(req, timeout=None):
-        requests_made.append(req)
-        return json_response(200, {"access_token": "abc123", "expires_in": 100})
+        calls.append(req)
+        return FakeResponse(
+            200, json.dumps({"access_token": "tok", "expires_in": 100}).encode()
+        )
 
     monkeypatch.setattr(main.urllib.request, "urlopen", fake_urlopen)
 
-    token = main._get_access_token()
-
-    assert token == "abc123"
-    assert len(requests_made) == 1
-    assert requests_made[0].full_url == main.KEYCLOAK_TOKEN_URL
-    assert main._token_cache["access_token"] == "abc123"
+    assert main._get_access_token() == "tok"
+    assert calls[0].full_url == KEYCLOAK_CFG["token_url"]
 
 
-def test_get_access_token_uses_cache_when_valid(monkeypatch):
-    main._token_cache["access_token"] = "cached-token"
+def test_get_access_token_uses_cache(monkeypatch):
+    main._token_cache["access_token"] = "cached"
     main._token_cache["expires_at"] = time.time() + 3600
 
     def fake_urlopen(req, timeout=None):
-        raise AssertionError("urlopen should not be called when the cache is valid")
+        raise AssertionError("should not call token endpoint when cached")
 
     monkeypatch.setattr(main.urllib.request, "urlopen", fake_urlopen)
-
-    token = main._get_access_token()
-
-    assert token == "cached-token"
+    assert main._get_access_token() == "cached"
 
 
-def test_get_access_token_refetches_when_expired(monkeypatch):
-    main._token_cache["access_token"] = "stale-token"
-    main._token_cache["expires_at"] = time.time() - 1
-
+def test_get_access_token_default_expiry(ssm, monkeypatch):
     def fake_urlopen(req, timeout=None):
-        return json_response(200, {"access_token": "fresh-token", "expires_in": 60})
+        return FakeResponse(200, json.dumps({"access_token": "tok"}).encode())
 
     monkeypatch.setattr(main.urllib.request, "urlopen", fake_urlopen)
-
-    token = main._get_access_token()
-
-    assert token == "fresh-token"
-
-
-def test_get_access_token_defaults_expires_in_when_absent(monkeypatch):
-    def fake_urlopen(req, timeout=None):
-        return json_response(200, {"access_token": "no-expiry-token"})
-
-    monkeypatch.setattr(main.urllib.request, "urlopen", fake_urlopen)
-
     before = time.time()
     main._get_access_token()
-
-    # default expires_in is 300 seconds, minus the 30s safety margin
     assert main._token_cache["expires_at"] >= before + 269
 
 
 # ---------------------------------------------------------------------------
-# _call_empatia
+# _post_transcription
 # ---------------------------------------------------------------------------
 
 
-def test_call_empatia_success(monkeypatch):
+def test_post_transcription_success(monkeypatch):
     captured = {}
 
     def fake_urlopen(req, timeout=None):
         captured["req"] = req
-        return json_response(200, {"result": "ok"})
+        return FakeResponse(201, b'{"ok": true}')
 
     monkeypatch.setattr(main.urllib.request, "urlopen", fake_urlopen)
+    status, body = main._post_transcription(CLIENT_CFG, TRANSCRIPTION, "tok")
 
-    status, body = main._call_empatia(VALID_PAYLOAD, "token-xyz")
+    assert status == 201
+    assert captured["req"].full_url == (
+        "https://api.example.com/transcription/api/tipificaciones/b_occ"
+    )
+    assert captured["req"].get_header("Authorization") == "Bearer tok"
 
-    assert status == 200
-    assert body == {"result": "ok"}
-    assert captured["req"].get_header("Authorization") == "Bearer token-xyz"
-    assert captured["req"].full_url == main.EMPATIA_API_URL
 
-
-def test_call_empatia_http_error_with_json_body(monkeypatch):
-    error_payload = json.dumps({"error": "bad request"}).encode("utf-8")
-
+def test_post_transcription_http_error(monkeypatch):
     def fake_urlopen(req, timeout=None):
-        raise http_error(400, error_payload)
+        raise http_error(500, b"boom")
 
     monkeypatch.setattr(main.urllib.request, "urlopen", fake_urlopen)
-
-    status, body = main._call_empatia(VALID_PAYLOAD, "token-xyz")
-
-    assert status == 400
-    assert body == {"error": "bad request"}
-
-
-def test_call_empatia_http_error_with_non_json_body(monkeypatch):
-    def fake_urlopen(req, timeout=None):
-        raise http_error(500, b"internal server error")
-
-    monkeypatch.setattr(main.urllib.request, "urlopen", fake_urlopen)
-
-    status, body = main._call_empatia(VALID_PAYLOAD, "token-xyz")
+    status, body = main._post_transcription(CLIENT_CFG, TRANSCRIPTION, "tok")
 
     assert status == 500
-    assert body == {"error": "internal server error"}
+    assert body == "boom"
+
+
+# ---------------------------------------------------------------------------
+# helpers
+# ---------------------------------------------------------------------------
+
+
+def test_client_key_from_object_key():
+    assert main._client_key_from_object_key("banco_occ/2026/x.json") == "banco_occ"
+
+
+def test_read_s3_json(s3):
+    assert (
+        main._read_s3_json("bucket", "banco_occ/2026/07/13/call.json") == TRANSCRIPTION
+    )
+
+
+def test_iter_s3_events_eventbridge():
+    events = list(main._iter_s3_events(eventbridge_body(key="banco_occ/a%20b.json")))
+    assert events == [("bucket", "banco_occ/a b.json")]
+
+
+def test_iter_s3_events_native_notification():
+    body = json.dumps(
+        {
+            "Records": [
+                {"s3": {"bucket": {"name": "b"}, "object": {"key": "banco_occ/x.json"}}}
+            ]
+        }
+    )
+    assert list(main._iter_s3_events(body)) == [("b", "banco_occ/x.json")]
+
+
+def test_iter_s3_events_native_record_without_s3_is_skipped():
+    body = json.dumps({"Records": [{"eventName": "ObjectRemoved"}]})
+    assert list(main._iter_s3_events(body)) == []
+
+
+def test_iter_s3_events_empty():
+    assert list(main._iter_s3_events(json.dumps({"foo": "bar"}))) == []
+
+
+# ---------------------------------------------------------------------------
+# _process_object
+# ---------------------------------------------------------------------------
+
+
+def test_process_object_disabled_client(monkeypatch, s3):
+    monkeypatch.setattr(
+        main, "_get_client_config", lambda key: {**CLIENT_CFG, "enabled": False}
+    )
+    called = []
+    monkeypatch.setattr(main, "_read_s3_json", lambda *a: called.append(a))
+
+    main._process_object("bucket", "banco_occ/2026/07/13/call.json")
+    assert called == []  # short-circuits before reading the object
+
+
+def test_process_object_raises_on_api_error(monkeypatch, ssm, s3):
+    monkeypatch.setattr(main, "_get_access_token", lambda: "tok")
+    monkeypatch.setattr(main, "_post_transcription", lambda *a: (502, "bad gateway"))
+
+    with pytest.raises(RuntimeError, match="502"):
+        main._process_object("bucket", "banco_occ/2026/07/13/call.json")
 
 
 # ---------------------------------------------------------------------------
@@ -163,73 +268,56 @@ def test_call_empatia_http_error_with_non_json_body(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_lambda_handler_success_with_api_gateway_string_body(monkeypatch):
-    monkeypatch.setattr(main, "_get_access_token", lambda: "token-xyz")
-    monkeypatch.setattr(
-        main, "_call_empatia", lambda payload, token: (200, {"result": "created"})
-    )
+def test_handler_success(monkeypatch, ssm, s3):
+    monkeypatch.setattr(main, "_get_access_token", lambda: "tok")
+    monkeypatch.setattr(main, "_post_transcription", lambda *a: (200, "{}"))
 
-    event = {"body": json.dumps(VALID_PAYLOAD)}
-    response = main.lambda_handler(event, None)
+    event = {"Records": [{"messageId": "m1", "body": eventbridge_body()}]}
+    result = main.lambda_handler(event, None)
 
-    assert response["statusCode"] == 200
-    assert json.loads(response["body"]) == {"result": "created"}
-    assert response["headers"]["Content-Type"] == "application/json"
+    assert result == {"batchItemFailures": []}
 
 
-def test_lambda_handler_direct_invocation_without_body_key(monkeypatch):
-    monkeypatch.setattr(main, "_get_access_token", lambda: "token-xyz")
-    monkeypatch.setattr(
-        main, "_call_empatia", lambda payload, token: (200, {"ok": True})
-    )
+def test_handler_skips_non_json(monkeypatch, ssm, s3):
+    calls = []
+    monkeypatch.setattr(main, "_process_object", lambda *a: calls.append(a))
 
-    response = main.lambda_handler(VALID_PAYLOAD, None)
+    body = eventbridge_body(key="banco_occ/2026/07/13/note.txt")
+    event = {"Records": [{"messageId": "m1", "body": body}]}
+    result = main.lambda_handler(event, None)
 
-    assert response["statusCode"] == 200
-
-
-def test_lambda_handler_body_already_a_dict(monkeypatch):
-    monkeypatch.setattr(main, "_get_access_token", lambda: "token-xyz")
-    monkeypatch.setattr(
-        main, "_call_empatia", lambda payload, token: (200, {"ok": True})
-    )
-
-    response = main.lambda_handler({"body": VALID_PAYLOAD}, None)
-
-    assert response["statusCode"] == 200
+    assert result == {"batchItemFailures": []}
+    assert calls == []
 
 
-def test_lambda_handler_missing_fields_returns_400():
-    incomplete_payload = {"idCall": "1"}
+def test_handler_reports_partial_failure(monkeypatch):
+    def boom(bucket, key):
+        raise RuntimeError("API 500")
 
-    response = main.lambda_handler(incomplete_payload, None)
+    monkeypatch.setattr(main, "_process_object", boom)
 
-    assert response["statusCode"] == 400
-    error = json.loads(response["body"])["error"]
-    assert "callId" in error
-    assert "documento" in error
+    event = {
+        "Records": [
+            {"messageId": "ok", "body": eventbridge_body(key="banco_occ/x.txt")},
+            {"messageId": "bad", "body": eventbridge_body()},
+        ]
+    }
+    result = main.lambda_handler(event, None)
 
-
-def test_lambda_handler_empty_string_body_returns_400():
-    response = main.lambda_handler({"body": ""}, None)
-
-    assert response["statusCode"] == 400
-
-
-def test_lambda_handler_token_error_returns_502(monkeypatch):
-    def failing_get_token():
-        raise RuntimeError("keycloak is down")
-
-    monkeypatch.setattr(main, "_get_access_token", failing_get_token)
-
-    response = main.lambda_handler({"body": json.dumps(VALID_PAYLOAD)}, None)
-
-    assert response["statusCode"] == 502
-    body = json.loads(response["body"])
-    assert body["detail"] == "keycloak is down"
+    assert result == {"batchItemFailures": [{"itemIdentifier": "bad"}]}
 
 
-def test_lambda_handler_non_dict_event_returns_400():
-    response = main.lambda_handler(None, None)
+def test_handler_failure_without_message_id_is_not_reported(monkeypatch):
+    def boom(bucket, key):
+        raise RuntimeError("API 500")
 
-    assert response["statusCode"] == 400
+    monkeypatch.setattr(main, "_process_object", boom)
+
+    event = {"Records": [{"body": eventbridge_body()}]}
+    result = main.lambda_handler(event, None)
+
+    assert result == {"batchItemFailures": []}
+
+
+def test_handler_empty_event():
+    assert main.lambda_handler({}, None) == {"batchItemFailures": []}

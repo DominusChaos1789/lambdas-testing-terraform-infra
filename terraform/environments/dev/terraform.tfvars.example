@@ -1,0 +1,25 @@
+aws_region     = "us-east-1"
+landing_bucket = "augusta-nexa-dev-providers-landing"
+
+# Onboard a new endpoint by adding a map entry. The key is the S3 path prefix
+# (e.g. objects land under "banco_occ/..."). No Lambda change required.
+clients = {
+  banco_occ = {
+    api_base_url  = "https://nexa-empatia-staging.nexabpo.com/transcription/api/tipificaciones"
+    endpoint_path = "b_occ"
+    enabled       = true
+  }
+  # banco_bogota = {
+  #   api_base_url  = "https://nexa-empatia-staging.nexabpo.com/transcription/api/tipificaciones"
+  #   endpoint_path = "b_bog"
+  #   enabled       = true
+  # }
+}
+
+# Do NOT commit real secrets. Prefer environment variables:
+#   export TF_VAR_keycloak_config='{"token_url":"...","client_id":"...","client_secret":"..."}'
+# keycloak_config = {
+#   token_url     = "https://login-server-staging.nexabpo.com/auth/realms/nexa/protocol/openid-connect/token"
+#   client_id     = "Connection.Apis.Auth"
+#   client_secret = "REPLACE_ME"
+# }
