@@ -7,7 +7,8 @@ import urllib.request
 
 KEYCLOAK_TOKEN_URL = os.environ.get(
     "KEYCLOAK_TOKEN_URL",
-    "https://login-server-staging.nexabpo.com/auth/realms/nexa/protocol/openid-connect/token",
+    "https://login-server-staging.nexabpo.com/auth/realms/nexa/protocol/"
+    "openid-connect/token",
 )
 EMPATIA_API_URL = os.environ.get(
     "EMPATIA_API_URL",
