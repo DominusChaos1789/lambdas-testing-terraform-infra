@@ -3,9 +3,10 @@ variable "aws_region" {
   default = "us-east-1"
 }
 
-variable "landing_bucket" {
-  type    = string
-  default = "augusta-nexa-dev-providers-landing"
+variable "stack_id" {
+  type        = string
+  default     = "augusta-nexa-dev"
+  description = "Stack id; landing bucket becomes <stack_id>-providers-landing."
 }
 
 variable "keycloak_config" {

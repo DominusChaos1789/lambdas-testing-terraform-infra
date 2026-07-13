@@ -14,7 +14,7 @@ provider "aws" {
 
   default_tags {
     tags = {
-      Project     = "nexa-empatia"
+      Stack       = "augusta-nexa-dev"
       Environment = "dev"
       ManagedBy   = "terraform"
     }

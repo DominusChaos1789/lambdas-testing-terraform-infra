@@ -1,6 +1,6 @@
 # Shared Keycloak client_credentials, encrypted at rest (JSON body).
 resource "aws_ssm_parameter" "keycloak" {
-  name        = "${local.ssm_prefix}/keycloak"
+  name        = "${local.ssm_base}/keycloak"
   description = "Shared Keycloak client_credentials for the EmpatIA API"
   type        = "SecureString"
   key_id      = var.kms_key_arn
@@ -13,7 +13,7 @@ resource "aws_ssm_parameter" "keycloak" {
 resource "aws_ssm_parameter" "client" {
   for_each = var.clients
 
-  name        = "${local.ssm_prefix}/clients/${each.key}"
+  name        = "${local.ssm_base}/${each.key}"
   description = "EmpatIA endpoint routing for client ${each.key}"
   type        = "String"
   value = jsonencode({

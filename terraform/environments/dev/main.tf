@@ -1,10 +1,7 @@
 module "transcription_forwarder" {
   source = "../../modules/transcription-forwarder"
 
-  project     = "nexa-empatia"
-  environment = "dev"
-
-  landing_bucket    = var.landing_bucket
+  stack_id          = var.stack_id
   lambda_source_dir = "${path.module}/../../../lambdas/empatia-tipificaciones"
 
   keycloak_config = var.keycloak_config

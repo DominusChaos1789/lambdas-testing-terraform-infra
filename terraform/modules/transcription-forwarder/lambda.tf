@@ -23,10 +23,10 @@ resource "aws_lambda_function" "forwarder" {
 
   environment {
     variables = {
-      ENV            = var.environment
-      SSM_PREFIX     = local.ssm_prefix
+      SSM_BASE       = local.ssm_base
       KEYCLOAK_PARAM = aws_ssm_parameter.keycloak.name
-      CLIENTS_PREFIX = "${local.ssm_prefix}/clients"
+      CLIENTS_PREFIX = local.ssm_base
+      LANDING_PREFIX = local.landing_prefix
     }
   }
 

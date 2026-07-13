@@ -1,8 +1,9 @@
-aws_region     = "us-east-1"
-landing_bucket = "augusta-nexa-dev-providers-landing"
+aws_region = "us-east-1"
+stack_id   = "augusta-nexa-dev" # -> landing bucket augusta-nexa-dev-providers-landing
 
-# Onboard a new endpoint by adding a map entry. The key is the S3 path prefix
-# (e.g. objects land under "banco_occ/..."). No Lambda change required.
+# Onboard a new endpoint by adding a map entry. The key is the client name and
+# must match the S3 path segment after the landing prefix
+# (transacciones/empatia/api/transcripciones/detalle/<client>/...). No Lambda change.
 clients = {
   banco_occ = {
     api_base_url  = "https://nexa-empatia-staging.nexabpo.com/transcription/api/tipificaciones"

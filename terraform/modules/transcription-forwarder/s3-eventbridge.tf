@@ -4,7 +4,7 @@
 # manage_bucket_notification = false and enable EventBridge elsewhere.
 resource "aws_s3_bucket_notification" "landing" {
   count       = var.manage_bucket_notification ? 1 : 0
-  bucket      = var.landing_bucket
+  bucket      = local.landing_bucket
   eventbridge = true
 }
 
@@ -19,9 +19,9 @@ resource "aws_cloudwatch_event_rule" "object_created" {
     source      = ["aws.s3"]
     detail-type = ["Object Created"]
     detail = {
-      bucket = { name = [var.landing_bucket] }
+      bucket = { name = [local.landing_bucket] }
       object = {
-        key = [for k in local.client_keys : { prefix = "${k}/" }]
+        key = [for k in local.client_keys : { prefix = "${local.landing_prefix}${k}/" }]
       }
     }
   })

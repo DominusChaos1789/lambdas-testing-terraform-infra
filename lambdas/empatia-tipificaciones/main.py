@@ -17,10 +17,20 @@ import urllib.request
 
 import boto3
 
-ENV = os.environ.get("ENV", "dev")
-SSM_PREFIX = os.environ.get("SSM_PREFIX", f"/nexa/empatia/{ENV}")
-KEYCLOAK_PARAM = os.environ.get("KEYCLOAK_PARAM", f"{SSM_PREFIX}/keycloak")
-CLIENTS_PREFIX = os.environ.get("CLIENTS_PREFIX", f"{SSM_PREFIX}/clients")
+# Base SSM path for this API's parameters, e.g.
+# /augusta-nexa-dev/empatia/transcripciones/detalle  (stack_id = augusta-nexa-dev)
+SSM_BASE = os.environ.get(
+    "SSM_BASE", "/augusta-nexa-dev/empatia/transcripciones/detalle"
+)
+# Shared Keycloak credentials live under the base; per-client configs are
+# siblings named after the client key (e.g. .../detalle/banco_occ).
+KEYCLOAK_PARAM = os.environ.get("KEYCLOAK_PARAM", f"{SSM_BASE}/keycloak")
+CLIENTS_PREFIX = os.environ.get("CLIENTS_PREFIX", SSM_BASE)
+# Fixed S3 key prefix the providers replicate into; the client key is the next
+# path segment after it (e.g. <prefix>/banco_occ/2026/07/13/file.json).
+LANDING_PREFIX = os.environ.get(
+    "LANDING_PREFIX", "transacciones/empatia/api/transcripciones/detalle/"
+)
 CONFIG_TTL = int(os.environ.get("CONFIG_TTL_SECONDS", "300"))
 
 _ssm = boto3.client("ssm")
@@ -102,8 +112,15 @@ def _post_transcription(client_cfg, payload, access_token):
 
 
 def _client_key_from_object_key(object_key):
-    """First path segment of the S3 key identifies the client/endpoint."""
-    return object_key.split("/", 1)[0]
+    """Client/endpoint key = first path segment after the fixed landing prefix.
+
+    e.g. "transacciones/empatia/api/transcripciones/detalle/banco_occ/x.json"
+    -> "banco_occ".
+    """
+    key = object_key
+    if LANDING_PREFIX and key.startswith(LANDING_PREFIX):
+        key = key[len(LANDING_PREFIX) :]
+    return key.split("/", 1)[0]
 
 
 def _read_s3_json(bucket, key):

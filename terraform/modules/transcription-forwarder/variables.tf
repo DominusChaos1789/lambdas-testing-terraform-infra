@@ -1,17 +1,18 @@
-variable "project" {
+variable "stack_id" {
   type        = string
-  default     = "nexa-empatia"
-  description = "Project prefix used to name resources."
-}
-
-variable "environment" {
-  type        = string
-  description = "Deployment environment (dev, staging, prod)."
+  description = "Stack identifier, e.g. augusta-nexa-dev. The trailing segment is the environment."
 }
 
 variable "landing_bucket" {
   type        = string
-  description = "Existing S3 bucket where providers replicate transcription JSON files."
+  default     = null
+  description = "Landing bucket. Defaults to \"<stack_id>-providers-landing\" when null."
+}
+
+variable "landing_prefix" {
+  type        = string
+  default     = "transacciones/empatia/api/transcripciones/detalle/"
+  description = "Fixed S3 key prefix providers replicate into; client key is the next segment."
 }
 
 variable "manage_bucket_notification" {

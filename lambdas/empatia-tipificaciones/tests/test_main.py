@@ -18,6 +18,10 @@ CLIENT_CFG = {
     "enabled": True,
 }
 TRANSCRIPTION = {"idCall": "123", "documento": "1063228193"}
+FULL_KEY = (
+    "transacciones/empatia/api/transcripciones/detalle/"
+    "banco_occ/2026/07/13/call.json"
+)
 
 
 class FakeSSM:
@@ -77,18 +81,12 @@ def ssm(monkeypatch):
 
 @pytest.fixture
 def s3(monkeypatch):
-    fake = FakeS3(
-        {
-            ("bucket", "banco_occ/2026/07/13/call.json"): json.dumps(
-                TRANSCRIPTION
-            ).encode()
-        }
-    )
+    fake = FakeS3({("bucket", FULL_KEY): json.dumps(TRANSCRIPTION).encode()})
     monkeypatch.setattr(main, "_s3", fake)
     return fake
 
 
-def eventbridge_body(bucket="bucket", key="banco_occ/2026/07/13/call.json"):
+def eventbridge_body(bucket="bucket", key=FULL_KEY):
     return json.dumps(
         {
             "detail-type": "Object Created",
@@ -204,14 +202,16 @@ def test_post_transcription_http_error(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_client_key_from_object_key():
+def test_client_key_from_object_key_strips_landing_prefix():
+    assert main._client_key_from_object_key(FULL_KEY) == "banco_occ"
+
+
+def test_client_key_from_object_key_without_prefix():
     assert main._client_key_from_object_key("banco_occ/2026/x.json") == "banco_occ"
 
 
 def test_read_s3_json(s3):
-    assert (
-        main._read_s3_json("bucket", "banco_occ/2026/07/13/call.json") == TRANSCRIPTION
-    )
+    assert main._read_s3_json("bucket", FULL_KEY) == TRANSCRIPTION
 
 
 def test_iter_s3_events_eventbridge():
@@ -260,7 +260,7 @@ def test_process_object_raises_on_api_error(monkeypatch, ssm, s3):
     monkeypatch.setattr(main, "_post_transcription", lambda *a: (502, "bad gateway"))
 
     with pytest.raises(RuntimeError, match="502"):
-        main._process_object("bucket", "banco_occ/2026/07/13/call.json")
+        main._process_object("bucket", FULL_KEY)
 
 
 # ---------------------------------------------------------------------------
