@@ -8,12 +8,13 @@ import pytest
 import main
 
 KEYCLOAK_CFG = {
-    "token_url": "https://login.example.com/token",
+    "token_url": "https://login-server-staging.nexabpo.com/token",
     "client_id": "Connection.Apis.Auth",
     "client_secret": "s3cr3t",
 }
+API_BASE = "https://nexa-empatia-staging.nexabpo.com/transcription/api/tipificaciones"
 CLIENT_CFG = {
-    "api_base_url": "https://api.example.com/transcription/api/tipificaciones",
+    "api_base_url": API_BASE,
     "endpoint_path": "b_occ",
     "enabled": True,
 }
@@ -180,9 +181,7 @@ def test_post_transcription_success(monkeypatch):
     status, body = main._post_transcription(CLIENT_CFG, TRANSCRIPTION, "tok")
 
     assert status == 201
-    assert captured["req"].full_url == (
-        "https://api.example.com/transcription/api/tipificaciones/b_occ"
-    )
+    assert captured["req"].full_url == f"{API_BASE}/b_occ"
     assert captured["req"].get_header("Authorization") == "Bearer tok"
 
 
@@ -195,6 +194,37 @@ def test_post_transcription_http_error(monkeypatch):
 
     assert status == 500
     assert body == "boom"
+
+
+# ---------------------------------------------------------------------------
+# _validate_url (SSRF guard)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://nexabpo.com/token",
+        "https://login-server-staging.nexabpo.com/auth/token",
+        "https://nexa-empatia-staging.nexabpo.com/transcription/api",
+    ],
+)
+def test_validate_url_allows_https_nexabpo(url):
+    assert main._validate_url(url) == url
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://nexa-empatia-staging.nexabpo.com/api",  # not https
+        "https://evil.example.com/api",  # host not allowlisted
+        "file:///etc/passwd",  # non-http scheme, no host
+        "https://nexabpo.com.attacker.com/api",  # suffix spoof
+    ],
+)
+def test_validate_url_rejects(url):
+    with pytest.raises(ValueError, match="non-allowlisted"):
+        main._validate_url(url)
 
 
 # ---------------------------------------------------------------------------

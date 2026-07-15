@@ -61,12 +61,29 @@ def _get_client_config(client_key):
     return _get_json_param(f"{CLIENTS_PREFIX}/{client_key}", with_decryption=False)
 
 
+def _validate_url(url):
+    """Allow only HTTPS calls to our own backends (SSRF guard).
+
+    The request URL comes from SSM config, so a config compromise must not be
+    able to redirect traffic to an arbitrary host or use a non-HTTPS scheme
+    such as file:// or ftp://.
+    """
+    parsed = urllib.parse.urlparse(url)
+    host = parsed.hostname or ""
+    if parsed.scheme != "https" or not (
+        host == "nexabpo.com" or host.endswith(".nexabpo.com")
+    ):
+        raise ValueError(f"Refusing request to non-allowlisted URL: {url}")
+    return url
+
+
 def _get_access_token():
     now = time.time()
     if _token_cache["access_token"] and now < _token_cache["expires_at"]:
         return _token_cache["access_token"]
 
     cfg = _get_keycloak_config()
+    token_url = _validate_url(cfg["token_url"])
     data = urllib.parse.urlencode(
         {
             "client_id": cfg["client_id"],
@@ -76,7 +93,7 @@ def _get_access_token():
     ).encode("utf-8")
 
     req = urllib.request.Request(
-        cfg["token_url"],
+        token_url,
         data=data,
         headers={"Content-Type": "application/x-www-form-urlencoded"},
         method="POST",
@@ -90,7 +107,7 @@ def _get_access_token():
 
 
 def _post_transcription(client_cfg, payload, access_token):
-    url = (
+    url = _validate_url(
         client_cfg["api_base_url"].rstrip("/")
         + "/"
         + client_cfg["endpoint_path"].lstrip("/")
