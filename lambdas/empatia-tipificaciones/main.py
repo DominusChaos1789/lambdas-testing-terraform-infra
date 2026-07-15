@@ -32,6 +32,10 @@ LANDING_PREFIX = os.environ.get(
     "LANDING_PREFIX", "transacciones/empatia/api/transcripciones/detalle/"
 )
 CONFIG_TTL = int(os.environ.get("CONFIG_TTL_SECONDS", "300"))
+# Account that owns the landing bucket. Passed as ExpectedBucketOwner on every
+# S3 read so a bucket deleted and re-created in another account cannot be read
+# (confused-deputy / bucket-sniping guard). Set by Terraform to the account id.
+AWS_ACCOUNT_ID = os.environ.get("AWS_ACCOUNT_ID", "")
 
 _ssm = boto3.client("ssm")
 _s3 = boto3.client("s3")
@@ -141,7 +145,7 @@ def _client_key_from_object_key(object_key):
 
 
 def _read_s3_json(bucket, key):
-    obj = _s3.get_object(Bucket=bucket, Key=key)
+    obj = _s3.get_object(Bucket=bucket, Key=key, ExpectedBucketOwner=AWS_ACCOUNT_ID)
     return json.loads(obj["Body"].read().decode("utf-8"))
 
 

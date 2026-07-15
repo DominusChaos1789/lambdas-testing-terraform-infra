@@ -38,8 +38,10 @@ class FakeSSM:
 class FakeS3:
     def __init__(self, objects):
         self.objects = objects
+        self.last_kwargs = None
 
-    def get_object(self, Bucket, Key):
+    def get_object(self, Bucket, Key, **kwargs):
+        self.last_kwargs = {"Bucket": Bucket, "Key": Key, **kwargs}
         return {"Body": BytesIO(self.objects[(Bucket, Key)])}
 
 
@@ -242,6 +244,12 @@ def test_client_key_from_object_key_without_prefix():
 
 def test_read_s3_json(s3):
     assert main._read_s3_json("bucket", FULL_KEY) == TRANSCRIPTION
+
+
+def test_read_s3_json_passes_expected_bucket_owner(s3):
+    main._read_s3_json("bucket", FULL_KEY)
+    assert s3.last_kwargs["ExpectedBucketOwner"] == main.AWS_ACCOUNT_ID
+    assert main.AWS_ACCOUNT_ID  # non-empty in the test environment
 
 
 def test_iter_s3_events_eventbridge():
