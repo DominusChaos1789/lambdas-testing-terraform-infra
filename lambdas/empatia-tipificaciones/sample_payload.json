@@ -1,0 +1,11 @@
+{
+  "idCall": "99901110121647",
+  "callId": "10000033",
+  "documento": "1063228193",
+  "primerNombre": "NICOLASS",
+  "primerApellido": "HERRERA",
+  "tipoPersona": "Natural",
+  "tipoDocumento": "CC",
+  "transcripcion": "# Conversacion de Soporte - Banco de Occidente\n\n**Cliente:** Hola, buenos dias. Necesito ayuda urgente. No puedo ingresar a mi aplicativo.\n\n**Agente:** Buenos dias. Bienvenido al soporte de Banco de Occidente. Cual es el mensaje de error?\n\n**Cliente:** Dice Usuario o contrasena incorrectos.\n\n**Agente:** Entiendo, voy a desbloquear su cuenta. Cual es su numero de cedula?\n\n**Cliente:** Es 1.052.345.678.\n\n**Agente:** Listo, acabo de desbloquear su cuenta.\n\n**Cliente:** Excelente, muchas gracias!\n\n**Agente:** De nada, que tenga un excelente dia!",
+  "fechaInicio": "08/07/2026 10:37:00"
+}

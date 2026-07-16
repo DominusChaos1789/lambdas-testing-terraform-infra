@@ -15,14 +15,12 @@ KEYCLOAK_CFG = {
 API_BASE = "https://nexa-empatia-staging.nexabpo.com/transcription/api/tipificaciones"
 CLIENT_CFG = {
     "api_base_url": API_BASE,
-    "endpoint_path": "b_occ",
+    "endpoint_path": "banco_occ",
     "enabled": True,
 }
 TRANSCRIPTION = {"idCall": "123", "documento": "1063228193"}
-FULL_KEY = (
-    "transacciones/empatia/api/transcripciones/detalle/"
-    "banco_occ/2026/07/13/call.json"
-)
+# S3 folder is "BDO"; it maps (via SSM) to the "banco_occ" endpoint.
+FULL_KEY = "transacciones/empatia/transcripciones/detalle/BDO/2026/07/13/call.json"
 
 
 class FakeSSM:
@@ -74,7 +72,7 @@ def http_error(code, body_bytes):
 def ssm(monkeypatch):
     fake = FakeSSM(
         {
-            f"{main.CLIENTS_PREFIX}/banco_occ": json.dumps(CLIENT_CFG),
+            f"{main.CLIENTS_PREFIX}/BDO": json.dumps(CLIENT_CFG),
             main.KEYCLOAK_PARAM: json.dumps(KEYCLOAK_CFG),
         }
     )
@@ -105,8 +103,8 @@ def eventbridge_body(bucket="bucket", key=FULL_KEY):
 
 
 def test_get_json_param_caches(ssm):
-    first = main._get_client_config("banco_occ")
-    second = main._get_client_config("banco_occ")
+    first = main._get_client_config("BDO")
+    second = main._get_client_config("BDO")
 
     assert first == CLIENT_CFG
     assert second == CLIENT_CFG
@@ -115,8 +113,8 @@ def test_get_json_param_caches(ssm):
 
 def test_get_json_param_refetches_after_ttl(ssm, monkeypatch):
     monkeypatch.setattr(main, "CONFIG_TTL", 0)
-    main._get_client_config("banco_occ")
-    main._get_client_config("banco_occ")
+    main._get_client_config("BDO")
+    main._get_client_config("BDO")
 
     assert len(ssm.calls) == 2
 
@@ -183,7 +181,7 @@ def test_post_transcription_success(monkeypatch):
     status, body = main._post_transcription(CLIENT_CFG, TRANSCRIPTION, "tok")
 
     assert status == 201
-    assert captured["req"].full_url == f"{API_BASE}/b_occ"
+    assert captured["req"].full_url == f"{API_BASE}/banco_occ"
     assert captured["req"].get_header("Authorization") == "Bearer tok"
 
 
@@ -235,11 +233,11 @@ def test_validate_url_rejects(url):
 
 
 def test_client_key_from_object_key_strips_landing_prefix():
-    assert main._client_key_from_object_key(FULL_KEY) == "banco_occ"
+    assert main._client_key_from_object_key(FULL_KEY) == "BDO"
 
 
 def test_client_key_from_object_key_without_prefix():
-    assert main._client_key_from_object_key("banco_occ/2026/x.json") == "banco_occ"
+    assert main._client_key_from_object_key("BDO/2026/x.json") == "BDO"
 
 
 def test_read_s3_json(s3):

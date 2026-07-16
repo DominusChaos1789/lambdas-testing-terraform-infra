@@ -9,7 +9,7 @@ segment `dev` is the environment):
 | Thing | Value |
 | --- | --- |
 | Landing bucket | `<stack_id>-providers-landing` → `augusta-nexa-dev-providers-landing` |
-| S3 landing prefix | `transacciones/empatia/api/transcripciones/detalle/` |
+| S3 landing prefix | `transacciones/empatia/transcripciones/detalle/` |
 | SSM base path | `/<stack_id>/empatia/transcripciones/detalle` → `/augusta-nexa-dev/empatia/transcripciones/detalle` |
 
 ```
@@ -18,8 +18,8 @@ Accenture account                Our account
 │ source bucket │ ──────────▶ │ augusta-nexa-dev-providers │
 └──────────────┘             │        -landing            │
                              └──────────────┬─────────────┘
-                              Object Created │  key: transacciones/empatia/api/
-                                             │       transcripciones/detalle/banco_occ/...
+                              Object Created │  key: transacciones/empatia/
+                                             │       transcripciones/detalle/BDO/...
                                              ▼
                                      ┌──────────────┐
                                      │ EventBridge  │  (rule: <prefix>/<client>/ )
@@ -78,16 +78,17 @@ Path: `/augusta-nexa-dev/empatia/transcripciones/detalle/keycloak`
 Path: `/augusta-nexa-dev/empatia/transcripciones/detalle/<client_name>`
 
 The `<client_name>` **is the client key** and **must match the S3 path segment
-that follows the landing prefix**. For Banco de Occidente the client name is
-`banco_occ`:
+that follows the landing prefix** — not the endpoint name. For Banco de
+Occidente the S3 folder (and therefore the client key) is `BDO`, while the API
+endpoint it maps to is `banco_occ`:
 
-- Parameter name: `/augusta-nexa-dev/empatia/transcripciones/detalle/banco_occ`
-- Files land at: `s3://augusta-nexa-dev-providers-landing/transacciones/empatia/api/transcripciones/detalle/banco_occ/2026/07/13/call-123.json`
+- Parameter name: `/augusta-nexa-dev/empatia/transcripciones/detalle/BDO`
+- Files land at: `s3://augusta-nexa-dev-providers-landing/transacciones/empatia/transcripciones/detalle/BDO/2026/07/13/call-123.json`
 
 ```json
 {
   "api_base_url": "https://nexa-empatia-staging.nexabpo.com/transcription/api/tipificaciones",
-  "endpoint_path": "b_occ",
+  "endpoint_path": "banco_occ",
   "enabled": true
 }
 ```
@@ -95,13 +96,13 @@ that follows the landing prefix**. For Banco de Occidente the client name is
 The Lambda builds the final URL as `api_base_url + "/" + endpoint_path`:
 
 ```
-https://nexa-empatia-staging.nexabpo.com/transcription/api/tipificaciones/b_occ
+https://nexa-empatia-staging.nexabpo.com/transcription/api/tipificaciones/banco_occ
 ```
 
 | Field | Meaning |
 | --- | --- |
 | `api_base_url` | Base URL of the EmpatIA tipificaciones API (no trailing endpoint) |
-| `endpoint_path` | Endpoint suffix for this client (`b_occ` for Banco de Occidente) |
+| `endpoint_path` | Endpoint suffix for this client (`banco_occ` for Banco de Occidente) |
 | `enabled` | `false` pauses forwarding for this client without deleting anything |
 
 > Note: `keycloak` is a reserved name under the base path — do not name a client
@@ -112,13 +113,13 @@ https://nexa-empatia-staging.nexabpo.com/transcription/api/tipificaciones/b_occ
 ## How the client name flows end to end
 
 ```
-S3 key:  transacciones/empatia/api/transcripciones/detalle/banco_occ/2026/07/13/call-123.json
+S3 key:  transacciones/empatia/transcripciones/detalle/BDO/2026/07/13/call-123.json
          └──────────────── landing prefix ───────────────┘└───┬────┘
                                                      client_key ┘  (strip prefix, take next segment)
                                                               │
-SSM lookup: /augusta-nexa-dev/empatia/transcripciones/detalle/banco_occ
+SSM lookup: /augusta-nexa-dev/empatia/transcripciones/detalle/BDO
                                                               │
-final POST: {api_base_url}/{endpoint_path}  ->  .../tipificaciones/b_occ
+final POST: {api_base_url}/{endpoint_path}  ->  .../tipificaciones/banco_occ
 ```
 
 ---
@@ -151,12 +152,12 @@ aws ssm put-parameter \
   --overwrite \
   --value '{"token_url":"https://login-server-staging.nexabpo.com/auth/realms/nexa/protocol/openid-connect/token","client_id":"Connection.Apis.Auth","client_secret":"REAL_SECRET_HERE"}'
 
-# banco_occ endpoint routing
+# BDO (Banco de Occidente) -> banco_occ endpoint routing
 aws ssm put-parameter \
-  --name "/augusta-nexa-dev/empatia/transcripciones/detalle/banco_occ" \
+  --name "/augusta-nexa-dev/empatia/transcripciones/detalle/BDO" \
   --type String \
   --overwrite \
-  --value '{"api_base_url":"https://nexa-empatia-staging.nexabpo.com/transcription/api/tipificaciones","endpoint_path":"b_occ","enabled":true}'
+  --value '{"api_base_url":"https://nexa-empatia-staging.nexabpo.com/transcription/api/tipificaciones","endpoint_path":"banco_occ","enabled":true}'
 ```
 
 The Lambda caches parameters in memory for `CONFIG_TTL_SECONDS` (default 300s),
@@ -164,20 +165,21 @@ so a manual change is picked up within ~5 minutes without a redeploy.
 
 ---
 
-## Adding a new endpoint (e.g. banco_bogota)
+## Adding a new endpoint (e.g. Banco de Bogota)
 
-1. Add an entry to the `clients` map in `terraform.tfvars`:
+1. Add an entry to the `clients` map in `terraform.tfvars`. The map key is the
+   **S3 folder**; `endpoint_path` is the **last segment of the API URL**:
    ```hcl
-   banco_bogota = {
+   BBOG = {
      api_base_url  = "https://nexa-empatia-staging.nexabpo.com/transcription/api/tipificaciones"
-     endpoint_path = "b_bog"
+     endpoint_path = "banco_bogota"
      enabled       = true
    }
    ```
-2. `terraform apply` — creates `/augusta-nexa-dev/empatia/transcripciones/detalle/banco_bogota`
+2. `terraform apply` — creates `/augusta-nexa-dev/empatia/transcripciones/detalle/BBOG`
    and extends the EventBridge rule to route the
-   `transacciones/empatia/api/transcripciones/detalle/banco_bogota/` prefix.
-3. Providers drop files under `.../detalle/banco_bogota/...`. **No Lambda change or redeploy.**
+   `transacciones/empatia/transcripciones/detalle/BBOG/` prefix.
+3. Providers drop files under `.../detalle/BBOG/...`. **No Lambda change or redeploy.**
 
 ---
 
@@ -186,7 +188,7 @@ so a manual change is picked up within ~5 minutes without a redeploy.
 **Option A — drop a file in S3** (full end-to-end):
 ```bash
 aws s3 cp sample.json \
-  s3://augusta-nexa-dev-providers-landing/transacciones/empatia/api/transcripciones/detalle/banco_occ/2026/07/13/sample.json
+  s3://augusta-nexa-dev-providers-landing/transacciones/empatia/transcripciones/detalle/BDO/2026/07/13/sample.json
 ```
 
 **Option B — console test event**: use

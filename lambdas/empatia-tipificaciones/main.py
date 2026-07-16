@@ -2,10 +2,11 @@
 
 A file dropped in the landing bucket (via Accenture's S3 replication) triggers
 an EventBridge "Object Created" event that is buffered in SQS and delivered to
-this Lambda. The object key's first path segment identifies the client
-(e.g. ``banco_occ/2026/07/13/call-123.json``). Per-client routing and shared
-Keycloak credentials are resolved from SSM Parameter Store, so onboarding a new
-endpoint is config-only -- no code change or redeploy.
+this Lambda. The path segment after the landing prefix identifies the client
+(e.g. ``.../detalle/BDO/2026/07/13/call-123.json`` -> client "BDO"). That client
+key maps, via SSM Parameter Store, to the API endpoint to call (BDO ->
+".../tipificaciones/banco_occ"), so onboarding a new endpoint is config-only --
+no code change or redeploy.
 """
 
 import json
@@ -27,9 +28,9 @@ SSM_BASE = os.environ.get(
 KEYCLOAK_PARAM = os.environ.get("KEYCLOAK_PARAM", f"{SSM_BASE}/keycloak")
 CLIENTS_PREFIX = os.environ.get("CLIENTS_PREFIX", SSM_BASE)
 # Fixed S3 key prefix the providers replicate into; the client key is the next
-# path segment after it (e.g. <prefix>/banco_occ/2026/07/13/file.json).
+# path segment after it (e.g. <prefix>/BDO/2026/07/13/file.json -> "BDO").
 LANDING_PREFIX = os.environ.get(
-    "LANDING_PREFIX", "transacciones/empatia/api/transcripciones/detalle/"
+    "LANDING_PREFIX", "transacciones/empatia/transcripciones/detalle/"
 )
 CONFIG_TTL = int(os.environ.get("CONFIG_TTL_SECONDS", "300"))
 # Account that owns the landing bucket. Passed as ExpectedBucketOwner on every
@@ -133,10 +134,9 @@ def _post_transcription(client_cfg, payload, access_token):
 
 
 def _client_key_from_object_key(object_key):
-    """Client/endpoint key = first path segment after the fixed landing prefix.
+    """Client key = first path segment after the fixed landing prefix.
 
-    e.g. "transacciones/empatia/api/transcripciones/detalle/banco_occ/x.json"
-    -> "banco_occ".
+    e.g. "transacciones/empatia/transcripciones/detalle/BDO/x.json" -> "BDO".
     """
     key = object_key
     if LANDING_PREFIX and key.startswith(LANDING_PREFIX):

@@ -1,18 +1,20 @@
 aws_region = "us-east-1"
 stack_id   = "augusta-nexa-dev" # -> landing bucket augusta-nexa-dev-providers-landing
 
-# Onboard a new endpoint by adding a map entry. The key is the client name and
-# must match the S3 path segment after the landing prefix
-# (transacciones/empatia/api/transcripciones/detalle/<client>/...). No Lambda change.
+# The map KEY is the S3 folder under the landing prefix
+#   transacciones/empatia/transcripciones/detalle/<KEY>/...
+# and endpoint_path is the LAST segment of the API URL. They are intentionally
+# decoupled: the folder "BDO" routes to the "banco_occ" endpoint.
+# Onboard a new endpoint by adding an entry here -- no Lambda change.
 clients = {
-  banco_occ = {
+  BDO = {
     api_base_url  = "https://nexa-empatia-staging.nexabpo.com/transcription/api/tipificaciones"
-    endpoint_path = "b_occ"
+    endpoint_path = "banco_occ"
     enabled       = true
   }
-  # banco_bogota = {
+  # BBOG = {
   #   api_base_url  = "https://nexa-empatia-staging.nexabpo.com/transcription/api/tipificaciones"
-  #   endpoint_path = "b_bog"
+  #   endpoint_path = "banco_bogota"
   #   enabled       = true
   # }
 }
