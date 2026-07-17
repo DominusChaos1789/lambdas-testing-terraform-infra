@@ -8,12 +8,14 @@ import pytest  # noqa: E402
 import main  # noqa: E402
 
 
+def _clear():
+    main._token_cache.clear()
+    main._config_cache.clear()
+    main._secret_cache.clear()
+
+
 @pytest.fixture(autouse=True)
 def reset_caches():
-    main._token_cache["access_token"] = None
-    main._token_cache["expires_at"] = 0
-    main._config_cache.clear()
+    _clear()
     yield
-    main._token_cache["access_token"] = None
-    main._token_cache["expires_at"] = 0
-    main._config_cache.clear()
+    _clear()

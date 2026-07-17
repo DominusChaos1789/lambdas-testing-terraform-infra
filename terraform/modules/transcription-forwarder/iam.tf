@@ -60,14 +60,21 @@ data "aws_iam_policy_document" "lambda" {
   }
 
   statement {
-    sid       = "DecryptSecureString"
+    sid       = "ReadClientSecrets"
+    effect    = "Allow"
+    actions   = ["secretsmanager:GetSecretValue"]
+    resources = [for s in data.aws_secretsmanager_secret.client : s.arn]
+  }
+
+  statement {
+    sid       = "DecryptClientSecrets"
     effect    = "Allow"
     actions   = ["kms:Decrypt"]
     resources = [coalesce(var.kms_key_arn, "*")]
     condition {
       test     = "StringEquals"
       variable = "kms:ViaService"
-      values   = ["ssm.${local.region}.amazonaws.com"]
+      values   = ["secretsmanager.${local.region}.amazonaws.com"]
     }
   }
 }

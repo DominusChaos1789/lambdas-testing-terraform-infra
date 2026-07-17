@@ -26,10 +26,10 @@ output "event_rule_arn" {
   value = aws_cloudwatch_event_rule.object_created.arn
 }
 
-output "ssm_keycloak_param" {
-  value = aws_ssm_parameter.keycloak.name
-}
-
 output "ssm_client_params" {
   value = { for k, p in aws_ssm_parameter.client : k => p.name }
+}
+
+output "client_secret_arns" {
+  value = { for k, s in data.aws_secretsmanager_secret.client : k => s.arn }
 }

@@ -35,10 +35,11 @@ Accenture account                Our account
                                  └─────────┬────────┘
                         ┌──────────────────┼───────────────────┐
                         ▼                  ▼                   ▼
-            SSM .../detalle/keycloak  SSM .../detalle/<client>  S3 GetObject
-               (SecureString)           (String, JSON)          (read payload)
-                        │                                             │
-                        └────────────── POST Bearer token ────────────┴──▶ EmpatIA API
+          SSM .../detalle/<CLIENT>   Secrets Manager        S3 GetObject
+          (String, JSON: routing)    <client>_detalle       (read payload)
+                                     (client_id/secret)
+                        │                  │                      │
+                        └───────── POST Bearer token ─────────────┴──▶ EmpatIA API
 ```
 
 ## Layout
@@ -51,87 +52,89 @@ terraform/
 
 ---
 
-## Parameter Store — JSON formats
+## Configuration: Secrets Manager + Parameter Store
 
-All configuration lives in SSM Parameter Store as **JSON documents** under the
-base path `/augusta-nexa-dev/empatia/transcripciones/detalle`.
+Config is split by sensitivity. **Credentials never live in Parameter Store or
+Terraform state.**
 
-### 1. Shared Keycloak credentials — `SecureString`
+| Store | Path | Holds |
+| --- | --- | --- |
+| Secrets Manager | `/augusta-nexa-dev/empatia/api/<client>_detalle` | `client_id`, `client_secret`, `grant_type` |
+| Parameter Store | `/augusta-nexa-dev/empatia/transcripciones/detalle/<CLIENT>` | `token_url`, `api_base_url`, `endpoint_path`, `bucket_prefix`, `secret_name`, `enabled` |
 
-Path: `/augusta-nexa-dev/empatia/transcripciones/detalle/keycloak`
+### 1. Credentials — Secrets Manager (one secret per client)
+
+Name: `/augusta-nexa-dev/empatia/api/bdo_detalle` (encrypted with the
+`augusta-nexa-dev` CMK). Managed **outside** this module — Terraform only reads it.
+
+```json
+{
+  "client_id": "Connection.Apis.Auth",
+  "client_secret": "REPLACE_WITH_REAL_CLIENT_SECRET",
+  "grant_type": "client_credentials"
+}
+```
+
+The name is derived from the client key: `BDO` -> `bdo_detalle`
+(`lower(<key>) + "_detalle"`). Override per client with `secret_name` if it differs.
+
+### 2. Routing — Parameter Store (one `String` param per client)
+
+Name: `/augusta-nexa-dev/empatia/transcripciones/detalle/BDO` — created by Terraform
+from the `clients` map.
 
 ```json
 {
   "token_url": "https://login-server-staging.nexabpo.com/auth/realms/nexa/protocol/openid-connect/token",
-  "client_id": "Connection.Apis.Auth",
-  "client_secret": "REPLACE_WITH_REAL_CLIENT_SECRET"
-}
-```
-
-- Stored as a **SecureString** (KMS-encrypted at rest); read with `WithDecryption=true`.
-- One shared credential is used for all endpoints.
-- ⚠️ **Never commit the real `client_secret`.** Inject it via `TF_VAR_keycloak_config`
-  or the AWS CLI. The value above is a placeholder.
-
-### 2. Per-client endpoint routing — `String`
-
-Path: `/augusta-nexa-dev/empatia/transcripciones/detalle/<client_name>`
-
-The `<client_name>` **is the client key** and **must match the S3 path segment
-that follows the landing prefix** — not the endpoint name. For Banco de
-Occidente the S3 folder (and therefore the client key) is `BDO`, while the API
-endpoint it maps to is `banco_occ`:
-
-- Parameter name: `/augusta-nexa-dev/empatia/transcripciones/detalle/BDO`
-- Files land at: `s3://augusta-nexa-dev-providers-landing/transacciones/empatia/transcripciones/detalle/BDO/2026/07/13/call-123.json`
-
-```json
-{
   "api_base_url": "https://nexa-empatia-staging.nexabpo.com/transcription/api/tipificaciones",
   "endpoint_path": "banco_occ",
+  "bucket_prefix": "transacciones/empatia/transcripciones/detalle/BDO/",
+  "secret_name": "/augusta-nexa-dev/empatia/api/bdo_detalle",
   "enabled": true
 }
 ```
 
-The Lambda builds the final URL as `api_base_url + "/" + endpoint_path`:
-
-```
-https://nexa-empatia-staging.nexabpo.com/transcription/api/tipificaciones/banco_occ
-```
-
 | Field | Meaning |
 | --- | --- |
+| `token_url` | Keycloak client-credentials token endpoint |
 | `api_base_url` | Base URL of the EmpatIA tipificaciones API (no trailing endpoint) |
-| `endpoint_path` | Endpoint suffix for this client (`banco_occ` for Banco de Occidente) |
-| `enabled` | `false` pauses forwarding for this client without deleting anything |
-
-> Note: `keycloak` is a reserved name under the base path — do not name a client
-> `keycloak`.
+| `endpoint_path` | Last URL segment for this client (`banco_occ` for Banco de Occidente) |
+| `bucket_prefix` | Expected S3 prefix; objects outside it are rejected |
+| `secret_name` | Secrets Manager secret holding this client's credentials |
+| `enabled` | `false` pauses forwarding without deleting anything |
 
 ---
 
-## How the client name flows end to end
+## How one file flows end to end
 
 ```
-S3 key:  transacciones/empatia/transcripciones/detalle/BDO/2026/07/13/call-123.json
-         └──────────────── landing prefix ───────────────┘└───┬────┘
-                                                     client_key ┘  (strip prefix, take next segment)
-                                                              │
-SSM lookup: /augusta-nexa-dev/empatia/transcripciones/detalle/BDO
-                                                              │
-final POST: {api_base_url}/{endpoint_path}  ->  .../tipificaciones/banco_occ
+S3 key:  transacciones/empatia/transcripciones/detalle/BDO/2026/07/13/call.json
+         └──────────────── landing prefix ───────────────┘└┬┘
+                                               client_key ─┘ = "BDO"
+                                                            │
+SSM   :  /augusta-nexa-dev/empatia/transcripciones/detalle/BDO
+             ├─ bucket_prefix  -> verify the key belongs to this client
+             ├─ secret_name    -> /augusta-nexa-dev/empatia/api/bdo_detalle
+             │                     └─ Secrets Manager: client_id / client_secret / grant_type
+             ├─ token_url      -> POST creds -> access_token   (cached per secret)
+             └─ api_base_url + "/" + endpoint_path
+                                                            │
+POST  :  https://nexa-empatia-staging.nexabpo.com/transcription/api/tipificaciones/banco_occ
 ```
+
+Tokens are cached **per secret**, so clients never share each other's tokens.
 
 ---
 
 ## Deploy
 
+**Prerequisite:** each client's secret must already exist in Secrets Manager
+(Terraform reads it, it does not create it). For `BDO`:
+`/augusta-nexa-dev/empatia/api/bdo_detalle`.
+
 ```bash
 cd environments/dev
-cp terraform.tfvars.example terraform.tfvars     # edit clients; keep secrets OUT of this file
-
-# Provide the Keycloak secret via env var (never in a committed file):
-export TF_VAR_keycloak_config='{"token_url":"https://login-server-staging.nexabpo.com/auth/realms/nexa/protocol/openid-connect/token","client_id":"Connection.Apis.Auth","client_secret":"REAL_SECRET_HERE"}'
+cp terraform.tfvars.example terraform.tfvars     # edit the clients map
 
 terraform init
 terraform validate
@@ -139,25 +142,23 @@ terraform plan
 terraform apply
 ```
 
-Terraform creates the SSM parameters from `var.keycloak_config` and `var.clients`,
-so you normally do **not** touch Parameter Store by hand.
+No secrets are passed to Terraform — it only creates the routing parameters from
+`var.clients` and grants the Lambda read access to the existing secrets.
 
-### Setting / rotating a parameter manually (AWS CLI)
+### Managing values manually (AWS CLI)
 
 ```bash
-# Keycloak credentials (encrypted)
-aws ssm put-parameter \
-  --name "/augusta-nexa-dev/empatia/transcripciones/detalle/keycloak" \
-  --type SecureString \
-  --overwrite \
-  --value '{"token_url":"https://login-server-staging.nexabpo.com/auth/realms/nexa/protocol/openid-connect/token","client_id":"Connection.Apis.Auth","client_secret":"REAL_SECRET_HERE"}'
+# Create / rotate a client's credentials (Secrets Manager)
+aws secretsmanager put-secret-value \
+  --secret-id "/augusta-nexa-dev/empatia/api/bdo_detalle" \
+  --secret-string '{"client_id":"Connection.Apis.Auth","client_secret":"REAL_SECRET_HERE","grant_type":"client_credentials"}'
 
-# BDO (Banco de Occidente) -> banco_occ endpoint routing
+# BDO (Banco de Occidente) -> banco_occ routing (normally Terraform-managed)
 aws ssm put-parameter \
   --name "/augusta-nexa-dev/empatia/transcripciones/detalle/BDO" \
   --type String \
   --overwrite \
-  --value '{"api_base_url":"https://nexa-empatia-staging.nexabpo.com/transcription/api/tipificaciones","endpoint_path":"banco_occ","enabled":true}'
+  --value '{"token_url":"https://login-server-staging.nexabpo.com/auth/realms/nexa/protocol/openid-connect/token","api_base_url":"https://nexa-empatia-staging.nexabpo.com/transcription/api/tipificaciones","endpoint_path":"banco_occ","bucket_prefix":"transacciones/empatia/transcripciones/detalle/BDO/","secret_name":"/augusta-nexa-dev/empatia/api/bdo_detalle","enabled":true}'
 ```
 
 The Lambda caches parameters in memory for `CONFIG_TTL_SECONDS` (default 300s),
@@ -167,19 +168,23 @@ so a manual change is picked up within ~5 minutes without a redeploy.
 
 ## Adding a new endpoint (e.g. Banco de Bogota)
 
-1. Add an entry to the `clients` map in `terraform.tfvars`. The map key is the
-   **S3 folder**; `endpoint_path` is the **last segment of the API URL**:
+1. Create the client's secret first (it must exist before `apply`):
+   `/augusta-nexa-dev/empatia/api/bdb_detalle`
+2. Add an entry to the `clients` map in `terraform.tfvars`. The map key is the
+   **S3 folder**; `endpoint_path` is the **last segment of the API URL**; the
+   secret name is derived from the key (`BDB` -> `bdb_detalle`):
    ```hcl
-   BBOG = {
+   BDB = {
+     token_url     = "https://login-server-staging.nexabpo.com/auth/realms/nexa/protocol/openid-connect/token"
      api_base_url  = "https://nexa-empatia-staging.nexabpo.com/transcription/api/tipificaciones"
      endpoint_path = "banco_bogota"
      enabled       = true
    }
    ```
-2. `terraform apply` — creates `/augusta-nexa-dev/empatia/transcripciones/detalle/BBOG`
+2. `terraform apply` — creates `/augusta-nexa-dev/empatia/transcripciones/detalle/BDB`
    and extends the EventBridge rule to route the
-   `transacciones/empatia/transcripciones/detalle/BBOG/` prefix.
-3. Providers drop files under `.../detalle/BBOG/...`. **No Lambda change or redeploy.**
+   `transacciones/empatia/transcripciones/detalle/BDB/` prefix.
+3. Providers drop files under `.../detalle/BDB/...`. **No Lambda change or redeploy.**
 
 ---
 

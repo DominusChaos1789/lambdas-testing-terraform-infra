@@ -27,31 +27,28 @@ variable "manage_bucket_notification" {
 
 variable "clients" {
   type = map(object({
+    token_url     = string
     api_base_url  = string
     endpoint_path = string
+    secret_name   = optional(string)
     enabled       = optional(bool, true)
   }))
   description = <<-EOT
-    Map of client_key => endpoint config. The client_key is the first path segment
-    of the S3 object (e.g. "banco_occ/2026/07/13/file.json"). Onboard a new endpoint
-    by adding an entry here -- no Lambda code change required.
-  EOT
-}
+    Map of client_key => config. The client_key is the S3 folder under the landing
+    prefix (e.g. "BDO"); endpoint_path is the last segment of the API URL (e.g.
+    "banco_occ") -- they are intentionally decoupled.
 
-variable "keycloak_config" {
-  type = object({
-    token_url     = string
-    client_id     = string
-    client_secret = string
-  })
-  sensitive   = true
-  description = "Shared Keycloak client_credentials config, stored as a SecureString."
+    Credentials are NOT stored here: each client reads them from a Secrets Manager
+    secret. secret_name defaults to /<stack_id>/empatia/api/<lowercase key>_detalle
+    (e.g. BDO -> /augusta-nexa-dev/empatia/api/bdo_detalle). The secret must already
+    exist; this module only reads it.
+  EOT
 }
 
 variable "kms_key_arn" {
   type        = string
   default     = null
-  description = "Optional CMK ARN for the SecureString. Defaults to the aws/ssm managed key."
+  description = "CMK ARN encrypting the client secrets (e.g. the augusta-nexa-dev key)."
 }
 
 variable "lambda_source_dir" {

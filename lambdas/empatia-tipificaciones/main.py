@@ -1,12 +1,20 @@
 """S3 -> SQS driven forwarder for call transcriptions.
 
-A file dropped in the landing bucket (via Accenture's S3 replication) triggers
+A file dropped in the landing bucket (via the provider's S3 replication) triggers
 an EventBridge "Object Created" event that is buffered in SQS and delivered to
 this Lambda. The path segment after the landing prefix identifies the client
-(e.g. ``.../detalle/BDO/2026/07/13/call-123.json`` -> client "BDO"). That client
-key maps, via SSM Parameter Store, to the API endpoint to call (BDO ->
-".../tipificaciones/banco_occ"), so onboarding a new endpoint is config-only --
-no code change or redeploy.
+(e.g. ``.../detalle/BDO/2026/07/13/call.json`` -> client "BDO").
+
+Configuration is split by sensitivity:
+
+* SSM Parameter Store (String, JSON) -- one parameter per client, holding
+  ``token_url``, ``api_base_url``, ``endpoint_path``, ``bucket_prefix`` and the
+  name of the secret to use.
+* Secrets Manager (JSON) -- one secret per client (e.g. ``bdo_detalle``),
+  holding ``client_id``, ``client_secret`` and ``grant_type``.
+
+Onboarding a new endpoint is config-only: create the secret, add the parameter.
+No code change or redeploy.
 """
 
 import json
@@ -23,9 +31,8 @@ import boto3
 SSM_BASE = os.environ.get(
     "SSM_BASE", "/augusta-nexa-dev/empatia/transcripciones/detalle"
 )
-# Shared Keycloak credentials live under the base; per-client configs are
-# siblings named after the client key (e.g. .../detalle/banco_occ).
-KEYCLOAK_PARAM = os.environ.get("KEYCLOAK_PARAM", f"{SSM_BASE}/keycloak")
+# Per-client config parameters are siblings named after the client key
+# (e.g. .../detalle/BDO).
 CLIENTS_PREFIX = os.environ.get("CLIENTS_PREFIX", SSM_BASE)
 # Fixed S3 key prefix the providers replicate into; the client key is the next
 # path segment after it (e.g. <prefix>/BDO/2026/07/13/file.json -> "BDO").
@@ -34,36 +41,46 @@ LANDING_PREFIX = os.environ.get(
 )
 CONFIG_TTL = int(os.environ.get("CONFIG_TTL_SECONDS", "300"))
 # Account that owns the landing bucket. Passed as ExpectedBucketOwner on every
-# S3 read so a bucket deleted and re-created in another account cannot be read
-# (confused-deputy / bucket-sniping guard). Set by Terraform to the account id.
+# S3 read so a bucket deleted and re-created in another account cannot be read.
 AWS_ACCOUNT_ID = os.environ.get("AWS_ACCOUNT_ID", "")
 
 _ssm = boto3.client("ssm")
 _s3 = boto3.client("s3")
+_secrets = boto3.client("secretsmanager")
 
-_token_cache = {"access_token": None, "expires_at": 0}
 _config_cache = {}  # param name -> (parsed_value, expires_at)
+_secret_cache = {}  # secret name -> (parsed_value, expires_at)
+_token_cache = {}  # secret name -> {"access_token": str, "expires_at": float}
 
 
-def _get_json_param(name, with_decryption=False):
+def _get_json_param(name):
     """Fetch and parse a JSON SSM parameter, cached in-memory for CONFIG_TTL."""
     now = time.time()
     cached = _config_cache.get(name)
     if cached and now < cached[1]:
         return cached[0]
 
-    resp = _ssm.get_parameter(Name=name, WithDecryption=with_decryption)
+    resp = _ssm.get_parameter(Name=name)
     value = json.loads(resp["Parameter"]["Value"])
     _config_cache[name] = (value, now + CONFIG_TTL)
     return value
 
 
-def _get_keycloak_config():
-    return _get_json_param(KEYCLOAK_PARAM, with_decryption=True)
-
-
 def _get_client_config(client_key):
-    return _get_json_param(f"{CLIENTS_PREFIX}/{client_key}", with_decryption=False)
+    return _get_json_param(f"{CLIENTS_PREFIX}/{client_key}")
+
+
+def _get_secret_json(secret_name):
+    """Fetch and parse a JSON secret, cached in-memory for CONFIG_TTL."""
+    now = time.time()
+    cached = _secret_cache.get(secret_name)
+    if cached and now < cached[1]:
+        return cached[0]
+
+    resp = _secrets.get_secret_value(SecretId=secret_name)
+    value = json.loads(resp["SecretString"])
+    _secret_cache[secret_name] = (value, now + CONFIG_TTL)
+    return value
 
 
 def _validate_url(url):
@@ -82,18 +99,21 @@ def _validate_url(url):
     return url
 
 
-def _get_access_token():
+def _get_access_token(client_cfg):
+    """Client-credentials token for one client, cached per secret until expiry."""
+    secret_name = client_cfg["secret_name"]
     now = time.time()
-    if _token_cache["access_token"] and now < _token_cache["expires_at"]:
-        return _token_cache["access_token"]
+    cached = _token_cache.get(secret_name)
+    if cached and now < cached["expires_at"]:
+        return cached["access_token"]
 
-    cfg = _get_keycloak_config()
-    token_url = _validate_url(cfg["token_url"])
+    creds = _get_secret_json(secret_name)
+    token_url = _validate_url(client_cfg["token_url"])
     data = urllib.parse.urlencode(
         {
-            "client_id": cfg["client_id"],
-            "client_secret": cfg["client_secret"],
-            "grant_type": "client_credentials",
+            "client_id": creds["client_id"],
+            "client_secret": creds["client_secret"],
+            "grant_type": creds.get("grant_type", "client_credentials"),
         }
     ).encode("utf-8")
 
@@ -106,9 +126,11 @@ def _get_access_token():
     with urllib.request.urlopen(req, timeout=10) as resp:
         body = json.loads(resp.read().decode("utf-8"))
 
-    _token_cache["access_token"] = body["access_token"]
-    _token_cache["expires_at"] = now + int(body.get("expires_in", 300)) - 30
-    return _token_cache["access_token"]
+    _token_cache[secret_name] = {
+        "access_token": body["access_token"],
+        "expires_at": now + int(body.get("expires_in", 300)) - 30,
+    }
+    return _token_cache[secret_name]["access_token"]
 
 
 def _post_transcription(client_cfg, payload, access_token):
@@ -178,8 +200,15 @@ def _process_object(bucket, key):
         print(f"Client '{client_key}' disabled, skipping s3://{bucket}/{key}")
         return
 
+    expected_prefix = client_cfg.get("bucket_prefix")
+    if expected_prefix and not key.startswith(expected_prefix):
+        raise RuntimeError(
+            f"s3://{bucket}/{key} is outside bucket_prefix "
+            f"'{expected_prefix}' configured for client '{client_key}'"
+        )
+
     payload = _read_s3_json(bucket, key)
-    token = _get_access_token()
+    token = _get_access_token(client_cfg)
     status, body = _post_transcription(client_cfg, payload, token)
 
     if status >= 400:

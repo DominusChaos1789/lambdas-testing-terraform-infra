@@ -1,28 +1,31 @@
-aws_region = "us-east-1"
+aws_region = "us-east-2"
 stack_id   = "augusta-nexa-dev" # -> landing bucket augusta-nexa-dev-providers-landing
+
+# CMK that encrypts the client secrets (the "augusta-nexa-dev" key).
+# Leave null to allow kms:Decrypt scoped by the secretsmanager ViaService condition.
+# kms_key_arn = "arn:aws:kms:us-east-2:575108921774:key/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 
 # The map KEY is the S3 folder under the landing prefix
 #   transacciones/empatia/transcripciones/detalle/<KEY>/...
-# and endpoint_path is the LAST segment of the API URL. They are intentionally
-# decoupled: the folder "BDO" routes to the "banco_occ" endpoint.
-# Onboard a new endpoint by adding an entry here -- no Lambda change.
+# endpoint_path is the LAST segment of the API URL. They are intentionally
+# decoupled: folder "BDO" -> endpoint "banco_occ".
+#
+# Credentials are NOT here. Each client reads them from Secrets Manager:
+#   BDO -> /augusta-nexa-dev/empatia/api/bdo_detalle   (derived from the key)
+# The secret must exist before apply. Override with secret_name if it differs.
 clients = {
   BDO = {
+    token_url     = "https://login-server-staging.nexabpo.com/auth/realms/nexa/protocol/openid-connect/token"
     api_base_url  = "https://nexa-empatia-staging.nexabpo.com/transcription/api/tipificaciones"
     endpoint_path = "banco_occ"
     enabled       = true
+    # secret_name = "/augusta-nexa-dev/empatia/api/bdo_detalle"  # default
   }
-  # BBOG = {
+  # BDB = {
+  #   token_url     = "https://login-server-staging.nexabpo.com/auth/realms/nexa/protocol/openid-connect/token"
   #   api_base_url  = "https://nexa-empatia-staging.nexabpo.com/transcription/api/tipificaciones"
   #   endpoint_path = "banco_bogota"
   #   enabled       = true
+  #   # secret_name defaults to /augusta-nexa-dev/empatia/api/bdb_detalle
   # }
 }
-
-# Do NOT commit real secrets. Prefer environment variables:
-#   export TF_VAR_keycloak_config='{"token_url":"...","client_id":"...","client_secret":"..."}'
-# keycloak_config = {
-#   token_url     = "https://login-server-staging.nexabpo.com/auth/realms/nexa/protocol/openid-connect/token"
-#   client_id     = "Connection.Apis.Auth"
-#   client_secret = "REPLACE_ME"
-# }

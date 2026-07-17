@@ -17,6 +17,12 @@ locals {
   region      = data.aws_region.current.region
   client_keys = keys(var.clients)
 
+  # BDO -> /augusta-nexa-dev/empatia/api/bdo_detalle (unless overridden)
+  client_secret_names = {
+    for k, v in var.clients :
+    k => coalesce(v.secret_name, "/${var.stack_id}/empatia/api/${lower(k)}_detalle")
+  }
+
   common_tags = merge(var.tags, {
     Stack       = var.stack_id
     Environment = local.environment

@@ -1,6 +1,6 @@
 variable "aws_region" {
   type    = string
-  default = "us-east-1"
+  default = "us-east-2"
 }
 
 variable "stack_id" {
@@ -9,20 +9,18 @@ variable "stack_id" {
   description = "Stack id; landing bucket becomes <stack_id>-providers-landing."
 }
 
-variable "keycloak_config" {
-  type = object({
-    token_url     = string
-    client_id     = string
-    client_secret = string
-  })
-  sensitive   = true
-  description = "Provide via TF_VAR_keycloak_config or a non-committed .tfvars/secret manager."
+variable "kms_key_arn" {
+  type        = string
+  default     = null
+  description = "CMK encrypting the client secrets (the augusta-nexa-dev key)."
 }
 
 variable "clients" {
   type = map(object({
+    token_url     = string
     api_base_url  = string
     endpoint_path = string
+    secret_name   = optional(string)
     enabled       = optional(bool, true)
   }))
 }

@@ -13,3 +13,7 @@ output "dlq_url" {
 output "ssm_client_params" {
   value = module.transcription_forwarder.ssm_client_params
 }
+
+output "client_secret_arns" {
+  value = module.transcription_forwarder.client_secret_arns
+}
