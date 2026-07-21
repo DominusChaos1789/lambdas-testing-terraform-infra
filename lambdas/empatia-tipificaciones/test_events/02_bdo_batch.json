@@ -1,0 +1,46 @@
+{
+  "Records": [
+    {
+      "messageId": "22222222-0001-0000-0000-000000000000",
+      "receiptHandle": "AQEB...",
+      "body": "{\"version\": \"0\", \"id\": \"6a7e8feb-b491-4cf7-a9f1-bf3703467718\", \"detail-type\": \"Object Created\", \"source\": \"aws.s3\", \"account\": \"575108921774\", \"region\": \"us-east-2\", \"time\": \"2026-07-13T10:37:00Z\", \"detail\": {\"version\": \"0\", \"bucket\": {\"name\": \"augusta-nexa-dev-providers-landing\"}, \"object\": {\"key\": \"external/transacciones/empatia/transcripciones/detalle/BDO/year=2026/month=07/day=13/call-1001.json\", \"size\": 2048, \"etag\": \"a1b2c3d4e5f6\"}, \"reason\": \"PutObject\"}}",
+      "attributes": {
+        "ApproximateReceiveCount": "1",
+        "SentTimestamp": "1752403020000"
+      },
+      "messageAttributes": {},
+      "md5OfBody": "0000",
+      "eventSource": "aws:sqs",
+      "eventSourceARN": "arn:aws:sqs:us-east-2:575108921774:augusta-nexa-dev-empatia-detalle-transcriptions",
+      "awsRegion": "us-east-2"
+    },
+    {
+      "messageId": "22222222-0002-0000-0000-000000000000",
+      "receiptHandle": "AQEB...",
+      "body": "{\"version\": \"0\", \"id\": \"6a7e8feb-b491-4cf7-a9f1-bf3703467718\", \"detail-type\": \"Object Created\", \"source\": \"aws.s3\", \"account\": \"575108921774\", \"region\": \"us-east-2\", \"time\": \"2026-07-13T10:37:00Z\", \"detail\": {\"version\": \"0\", \"bucket\": {\"name\": \"augusta-nexa-dev-providers-landing\"}, \"object\": {\"key\": \"external/transacciones/empatia/transcripciones/detalle/BDO/year=2026/month=07/day=14/call-1002.json\", \"size\": 2048, \"etag\": \"a1b2c3d4e5f6\"}, \"reason\": \"PutObject\"}}",
+      "attributes": {
+        "ApproximateReceiveCount": "1",
+        "SentTimestamp": "1752403020000"
+      },
+      "messageAttributes": {},
+      "md5OfBody": "0000",
+      "eventSource": "aws:sqs",
+      "eventSourceARN": "arn:aws:sqs:us-east-2:575108921774:augusta-nexa-dev-empatia-detalle-transcriptions",
+      "awsRegion": "us-east-2"
+    },
+    {
+      "messageId": "22222222-0003-0000-0000-000000000000",
+      "receiptHandle": "AQEB...",
+      "body": "{\"version\": \"0\", \"id\": \"6a7e8feb-b491-4cf7-a9f1-bf3703467718\", \"detail-type\": \"Object Created\", \"source\": \"aws.s3\", \"account\": \"575108921774\", \"region\": \"us-east-2\", \"time\": \"2026-07-13T10:37:00Z\", \"detail\": {\"version\": \"0\", \"bucket\": {\"name\": \"augusta-nexa-dev-providers-landing\"}, \"object\": {\"key\": \"external/transacciones/empatia/transcripciones/detalle/BDO/year=2026/month=07/day=14/call-1003.json\", \"size\": 2048, \"etag\": \"a1b2c3d4e5f6\"}, \"reason\": \"PutObject\"}}",
+      "attributes": {
+        "ApproximateReceiveCount": "1",
+        "SentTimestamp": "1752403020000"
+      },
+      "messageAttributes": {},
+      "md5OfBody": "0000",
+      "eventSource": "aws:sqs",
+      "eventSourceARN": "arn:aws:sqs:us-east-2:575108921774:augusta-nexa-dev-empatia-detalle-transcriptions",
+      "awsRegion": "us-east-2"
+    }
+  ]
+}

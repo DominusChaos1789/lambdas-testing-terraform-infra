@@ -3,7 +3,8 @@
 A file dropped in the landing bucket (via the provider's S3 replication) triggers
 an EventBridge "Object Created" event that is buffered in SQS and delivered to
 this Lambda. The path segment after the landing prefix identifies the client
-(e.g. ``.../detalle/BDO/2026/07/13/call.json`` -> client "BDO").
+(e.g. ``.../detalle/BDO/year=2026/month=07/day=13/call.json`` -> client "BDO").
+Objects land in Hive-partitioned folders, but only the client segment matters.
 
 Configuration is split by sensitivity:
 
@@ -35,9 +36,10 @@ SSM_BASE = os.environ.get(
 # (e.g. .../detalle/BDO).
 CLIENTS_PREFIX = os.environ.get("CLIENTS_PREFIX", SSM_BASE)
 # Fixed S3 key prefix the providers replicate into; the client key is the next
-# path segment after it (e.g. <prefix>/BDO/2026/07/13/file.json -> "BDO").
+# path segment after it (e.g. <prefix>/BDO/year=2026/month=07/day=13/file.json
+# -> "BDO"). Data lands in Hive-partitioned folders under the client segment.
 LANDING_PREFIX = os.environ.get(
-    "LANDING_PREFIX", "transacciones/empatia/transcripciones/detalle/"
+    "LANDING_PREFIX", "external/transacciones/empatia/transcripciones/detalle/"
 )
 CONFIG_TTL = int(os.environ.get("CONFIG_TTL_SECONDS", "300"))
 # Account that owns the landing bucket. Passed as ExpectedBucketOwner on every
@@ -158,7 +160,7 @@ def _post_transcription(client_cfg, payload, access_token):
 def _client_key_from_object_key(object_key):
     """Client key = first path segment after the fixed landing prefix.
 
-    e.g. "transacciones/empatia/transcripciones/detalle/BDO/x.json" -> "BDO".
+    e.g. "external/.../detalle/BDO/year=2026/month=07/day=13/x.json" -> "BDO".
     """
     key = object_key
     if LANDING_PREFIX and key.startswith(LANDING_PREFIX):

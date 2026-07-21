@@ -11,8 +11,9 @@ API_BASE = "https://nexa-empatia-staging.nexabpo.com/transcription/api/tipificac
 TOKEN_URL = "https://login-server-staging.nexabpo.com/auth/realms/nexa/token"
 SECRET_NAME = "/augusta-nexa-dev/empatia/api/bdo_detalle"
 # S3 folder is "BDO"; it maps (via SSM) to the "banco_occ" endpoint.
-LANDING = "transacciones/empatia/transcripciones/detalle/"
-FULL_KEY = f"{LANDING}BDO/2026/07/13/call.json"
+# Objects land in Hive-partitioned folders under an "external/" root.
+LANDING = "external/transacciones/empatia/transcripciones/detalle/"
+FULL_KEY = f"{LANDING}BDO/year=2026/month=07/day=13/call.json"
 
 CLIENT_CFG = {
     "token_url": TOKEN_URL,

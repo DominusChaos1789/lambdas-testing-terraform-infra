@@ -9,7 +9,7 @@ segment `dev` is the environment):
 | Thing | Value |
 | --- | --- |
 | Landing bucket | `<stack_id>-providers-landing` → `augusta-nexa-dev-providers-landing` |
-| S3 landing prefix | `transacciones/empatia/transcripciones/detalle/` |
+| S3 landing prefix | `external/transacciones/empatia/transcripciones/detalle/` |
 | SSM base path | `/<stack_id>/empatia/transcripciones/detalle` → `/augusta-nexa-dev/empatia/transcripciones/detalle` |
 
 ```
@@ -18,8 +18,8 @@ Accenture account                Our account
 │ source bucket │ ──────────▶ │ augusta-nexa-dev-providers │
 └──────────────┘             │        -landing            │
                              └──────────────┬─────────────┘
-                              Object Created │  key: transacciones/empatia/
-                                             │       transcripciones/detalle/BDO/...
+                              Object Created │  key: external/transacciones/empatia/
+                                             │  transcripciones/detalle/BDO/year=…/…
                                              ▼
                                      ┌──────────────┐
                                      │ EventBridge  │  (rule: <prefix>/<client>/ )
@@ -88,7 +88,7 @@ from the `clients` map.
   "token_url": "https://login-server-staging.nexabpo.com/auth/realms/nexa/protocol/openid-connect/token",
   "api_base_url": "https://nexa-empatia-staging.nexabpo.com/transcription/api/tipificaciones",
   "endpoint_path": "banco_occ",
-  "bucket_prefix": "transacciones/empatia/transcripciones/detalle/BDO/",
+  "bucket_prefix": "external/transacciones/empatia/transcripciones/detalle/BDO/",
   "secret_name": "/augusta-nexa-dev/empatia/api/bdo_detalle",
   "enabled": true
 }
@@ -108,7 +108,7 @@ from the `clients` map.
 ## How one file flows end to end
 
 ```
-S3 key:  transacciones/empatia/transcripciones/detalle/BDO/2026/07/13/call.json
+S3 key:  external/transacciones/empatia/transcripciones/detalle/BDO/year=2026/month=07/day=13/call.json
          └──────────────── landing prefix ───────────────┘└┬┘
                                                client_key ─┘ = "BDO"
                                                             │
@@ -158,7 +158,7 @@ aws ssm put-parameter \
   --name "/augusta-nexa-dev/empatia/transcripciones/detalle/BDO" \
   --type String \
   --overwrite \
-  --value '{"token_url":"https://login-server-staging.nexabpo.com/auth/realms/nexa/protocol/openid-connect/token","api_base_url":"https://nexa-empatia-staging.nexabpo.com/transcription/api/tipificaciones","endpoint_path":"banco_occ","bucket_prefix":"transacciones/empatia/transcripciones/detalle/BDO/","secret_name":"/augusta-nexa-dev/empatia/api/bdo_detalle","enabled":true}'
+  --value '{"token_url":"https://login-server-staging.nexabpo.com/auth/realms/nexa/protocol/openid-connect/token","api_base_url":"https://nexa-empatia-staging.nexabpo.com/transcription/api/tipificaciones","endpoint_path":"banco_occ","bucket_prefix":"external/transacciones/empatia/transcripciones/detalle/BDO/","secret_name":"/augusta-nexa-dev/empatia/api/bdo_detalle","enabled":true}'
 ```
 
 The Lambda caches parameters in memory for `CONFIG_TTL_SECONDS` (default 300s),
@@ -183,7 +183,7 @@ so a manual change is picked up within ~5 minutes without a redeploy.
    ```
 2. `terraform apply` — creates `/augusta-nexa-dev/empatia/transcripciones/detalle/BDB`
    and extends the EventBridge rule to route the
-   `transacciones/empatia/transcripciones/detalle/BDB/` prefix.
+   `external/transacciones/empatia/transcripciones/detalle/BDB/` prefix.
 3. Providers drop files under `.../detalle/BDB/...`. **No Lambda change or redeploy.**
 
 ---
@@ -193,7 +193,7 @@ so a manual change is picked up within ~5 minutes without a redeploy.
 **Option A — drop a file in S3** (full end-to-end):
 ```bash
 aws s3 cp sample.json \
-  s3://augusta-nexa-dev-providers-landing/transacciones/empatia/transcripciones/detalle/BDO/2026/07/13/sample.json
+  s3://augusta-nexa-dev-providers-landing/external/transacciones/empatia/transcripciones/detalle/BDO/2026/07/13/sample.json
 ```
 
 **Option B — console test event**: use
