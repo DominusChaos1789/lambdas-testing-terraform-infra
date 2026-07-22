@@ -2,30 +2,30 @@ aws_region = "us-east-2"
 stack_id   = "augusta-nexa-dev" # -> landing bucket augusta-nexa-dev-providers-landing
 
 # CMK that encrypts the client secrets (the "augusta-nexa-dev" key).
-# Leave null to allow kms:Decrypt scoped by the secretsmanager ViaService condition.
 # kms_key_arn = "arn:aws:kms:us-east-2:575108921774:key/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 
 # The map KEY is the S3 folder under the landing prefix
-#   transacciones/empatia/transcripciones/detalle/<KEY>/...
-# endpoint_path is the LAST segment of the API URL. They are intentionally
-# decoupled: folder "BDO" -> endpoint "banco_occ".
-#
-# Credentials are NOT here. Each client reads them from Secrets Manager:
-#   BDO -> /augusta-nexa-dev/empatia/api/bdo_detalle   (derived from the key)
-# The secret must exist before apply. Override with secret_name if it differs.
+#   external/transacciones/empatia/transcripciones/<KEY>/year=.../...
+# and also maps to the parameter/secret "<lower key>-detalle".
+# URLs are split into host + path; endpoint_path / enpoint_cypher_path are the
+# last URL segments. Credentials live in Secrets Manager (must exist before apply).
 clients = {
   BDO = {
-    token_url     = "https://login-server-staging.nexabpo.com/auth/realms/nexa/protocol/openid-connect/token"
-    api_base_url  = "https://nexa-empatia-staging.nexabpo.com/transcription/api/tipificaciones"
-    endpoint_path = "banco_occ"
-    enabled       = true
-    # secret_name = "/augusta-nexa-dev/empatia/api/bdo_detalle"  # default
+    token_url           = "https://login-server-staging.nexabpo.com"
+    token_path          = "auth/realms/nexa/protocol/openid-connect/token"
+    api_url             = "https://nexa-empatia-staging.nexabpo.com"
+    api_path            = "transcription/api/tipificaciones"
+    endpoint_path       = "banco_occ"
+    enpoint_cypher_path = "bboc_encrip" # omit for clients without encrypted delivery
+    enabled             = true
+    # secret_name defaults to empatia/api/bdo-detalle (relative; stack prepended at runtime)
   }
   # BDB = {
-  #   token_url     = "https://login-server-staging.nexabpo.com/auth/realms/nexa/protocol/openid-connect/token"
-  #   api_base_url  = "https://nexa-empatia-staging.nexabpo.com/transcription/api/tipificaciones"
-  #   endpoint_path = "banco_bogota"
-  #   enabled       = true
-  #   # secret_name defaults to /augusta-nexa-dev/empatia/api/bdb_detalle
+  #   token_url           = "https://login-server-staging.nexabpo.com"
+  #   token_path          = "auth/realms/nexa/protocol/openid-connect/token"
+  #   api_url             = "https://nexa-empatia-staging.nexabpo.com"
+  #   api_path            = "transcription/api/tipificaciones"
+  #   endpoint_path       = "banco_bogota"
+  #   enabled             = true
   # }
 }

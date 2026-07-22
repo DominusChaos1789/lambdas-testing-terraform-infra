@@ -6,18 +6,17 @@ this Lambda. The path segment after the landing prefix identifies the client
 (e.g. ``.../transcripciones/BDO/year=2026/month=07/day=13/call.json`` -> "BDO").
 Objects land in Hive-partitioned folders, but only the client segment matters.
 
-Per file the Lambda POSTs the transcription to the client's plaintext endpoint
-(``endpoint_path``) and, when the client's secret also defines ``cypher_id`` /
-``cypher_code``, an AES-256-encrypted copy to the ``cypher_id`` endpoint.
+Configuration is split by sensitivity and is environment-relative (STACK_ID):
 
-Configuration is split by sensitivity:
+* SSM Parameter Store (String, JSON) at /<stack>/empatia/api/<client>-detalle,
+  holding token_url/token_path, api_url/api_path, endpoint_path,
+  enpoint_cypher_path, bucket_prefix, secret_name (relative) and enabled.
+* Secrets Manager (JSON) at /<stack>/<secret_name>, holding client_id,
+  client_secret, grant_type and (for encrypted delivery) cypher_code.
 
-* SSM Parameter Store (String, JSON) -- one parameter per client, holding
-  ``token_url``, ``api_base_url``, ``endpoint_path``, ``bucket_prefix`` and the
-  name of the secret to use.
-* Secrets Manager (JSON) -- one secret per client (e.g. ``bdo_detalle``),
-  holding ``client_id``, ``client_secret``, ``grant_type`` and, for encrypted
-  delivery, ``cypher_id`` and ``cypher_code`` (base64 AES-256 key).
+Per file the Lambda POSTs the transcription to endpoint_path and, when both
+enpoint_cypher_path and cypher_code are configured, an AES-256-encrypted copy to
+enpoint_cypher_path. Onboarding a new endpoint is config-only.
 """
 
 import base64
@@ -32,13 +31,13 @@ import boto3
 from cryptography.hazmat.primitives import padding as sym_padding
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
-# Base SSM path for this API's parameters, e.g.
-# /augusta-nexa-dev/empatia/transcripciones/detalle  (stack_id = augusta-nexa-dev)
-SSM_BASE = os.environ.get(
-    "SSM_BASE", "/augusta-nexa-dev/empatia/transcripciones/detalle"
-)
-# Per-client config parameters are siblings named after the client key.
-CLIENTS_PREFIX = os.environ.get("CLIENTS_PREFIX", SSM_BASE)
+# Stack identity (e.g. augusta-nexa-dev / -stg / -pro). Drives the SSM parameter
+# and Secrets Manager paths so the same config is portable across environments.
+STACK_ID = os.environ.get("STACK_ID", "augusta-nexa-dev")
+# Base path holding the per-client parameters: /<stack>/empatia/api
+PARAM_PREFIX = os.environ.get("PARAM_PREFIX", f"/{STACK_ID}/empatia/api")
+# Client key "BDO" -> parameter/secret suffix "bdo-detalle".
+CLIENT_PARAM_SUFFIX = os.environ.get("CLIENT_PARAM_SUFFIX", "-detalle")
 # Fixed S3 key prefix the providers replicate into; the client key is the next
 # path segment after it (e.g. <prefix>/BDO/year=2026/month=07/day=13/file.json
 # -> "BDO"). Data lands in Hive-partitioned folders under the client segment.
@@ -72,8 +71,19 @@ def _get_json_param(name):
     return value
 
 
+def _client_param_name(client_key):
+    return f"{PARAM_PREFIX}/{client_key.lower()}{CLIENT_PARAM_SUFFIX}"
+
+
 def _get_client_config(client_key):
-    return _get_json_param(f"{CLIENTS_PREFIX}/{client_key}")
+    return _get_json_param(_client_param_name(client_key))
+
+
+def _full_secret_name(relative_or_absolute):
+    """Secret names in the parameter are environment-relative (no stack prefix)."""
+    if relative_or_absolute.startswith("/"):
+        return relative_or_absolute
+    return f"/{STACK_ID}/{relative_or_absolute}"
 
 
 def _get_secret_json(secret_name):
@@ -87,6 +97,14 @@ def _get_secret_json(secret_name):
     value = json.loads(resp["SecretString"])
     _secret_cache[secret_name] = (value, now + CONFIG_TTL)
     return value
+
+
+def _join_url(host, *parts):
+    """Build a URL from a host and one or more path segments."""
+    url = host.rstrip("/")
+    for part in parts:
+        url += "/" + part.strip("/")
+    return url
 
 
 def _validate_url(url):
@@ -122,15 +140,14 @@ def _encrypt_payload(payload, cypher_code_b64):
     return base64.b64encode(iv + ciphertext).decode("ascii")
 
 
-def _get_access_token(client_cfg, creds):
-    """Client-credentials token for one client, cached per secret until expiry."""
-    secret_name = client_cfg["secret_name"]
+def _get_access_token(token_url, creds, cache_key):
+    """Client-credentials token, cached per secret (cache_key) until expiry."""
     now = time.time()
-    cached = _token_cache.get(secret_name)
+    cached = _token_cache.get(cache_key)
     if cached and now < cached["expires_at"]:
         return cached["access_token"]
 
-    token_url = _validate_url(client_cfg["token_url"])
+    token_url = _validate_url(token_url)
     data = urllib.parse.urlencode(
         {
             "client_id": creds["client_id"],
@@ -148,15 +165,15 @@ def _get_access_token(client_cfg, creds):
     with urllib.request.urlopen(req, timeout=10) as resp:
         body = json.loads(resp.read().decode("utf-8"))
 
-    _token_cache[secret_name] = {
+    _token_cache[cache_key] = {
         "access_token": body["access_token"],
         "expires_at": now + int(body.get("expires_in", 300)) - 30,
     }
-    return _token_cache[secret_name]["access_token"]
+    return _token_cache[cache_key]["access_token"]
 
 
-def _post_json(api_base_url, endpoint_suffix, body_obj, access_token):
-    url = _validate_url(api_base_url.rstrip("/") + "/" + endpoint_suffix.lstrip("/"))
+def _post_json(url, body_obj, access_token):
+    url = _validate_url(url)
     req = urllib.request.Request(
         url,
         data=json.dumps(body_obj).encode("utf-8"),
@@ -210,11 +227,18 @@ def _iter_s3_events(sqs_body):
             yield s3_event["bucket"]["name"], key
 
 
-def _forward(api_base_url, suffix, body_obj, token, bucket, key, label):
-    status, body = _post_json(api_base_url, suffix, body_obj, token)
+def _forward(url, body_obj, token, bucket, key, label):
+    status, body = _post_json(url, body_obj, token)
     if status >= 400:
         raise RuntimeError(f"API {status} ({label}) for s3://{bucket}/{key}: {body}")
-    print(f"Forwarded ({label}) s3://{bucket}/{key} to '{suffix}' -> {status}")
+    print(f"Forwarded ({label}) s3://{bucket}/{key} -> {status}")
+
+
+def _cypher_path(client_cfg):
+    # Config uses the key "enpoint_cypher_path" (sic); tolerate the fixed spelling.
+    return client_cfg.get("enpoint_cypher_path") or client_cfg.get(
+        "endpoint_cypher_path"
+    )
 
 
 def _process_object(bucket, key):
@@ -232,22 +256,32 @@ def _process_object(bucket, key):
             f"'{expected_prefix}' configured for client '{client_key}'"
         )
 
-    creds = _get_secret_json(client_cfg["secret_name"])
+    secret_name = _full_secret_name(client_cfg["secret_name"])
+    creds = _get_secret_json(secret_name)
     payload = _read_s3_json(bucket, key)
-    token = _get_access_token(client_cfg, creds)
-    api_base_url = client_cfg["api_base_url"]
+
+    token_url = _join_url(client_cfg["token_url"], client_cfg["token_path"])
+    token = _get_access_token(token_url, creds, secret_name)
+    api_base = _join_url(client_cfg["api_url"], client_cfg["api_path"])
 
     # Plaintext delivery.
     _forward(
-        api_base_url, client_cfg["endpoint_path"], payload, token, bucket, key, "plain"
+        _join_url(api_base, client_cfg["endpoint_path"]),
+        payload,
+        token,
+        bucket,
+        key,
+        "plain",
     )
 
-    # Encrypted delivery (only when the client's secret defines both fields).
-    cypher_id = creds.get("cypher_id")
+    # Encrypted delivery (only when both the endpoint path and key are set).
+    cypher_path = _cypher_path(client_cfg)
     cypher_code = creds.get("cypher_code")
-    if cypher_id and cypher_code:
+    if cypher_path and cypher_code:
         encrypted = {"payload": _encrypt_payload(payload, cypher_code)}
-        _forward(api_base_url, cypher_id, encrypted, token, bucket, key, "encrypted")
+        _forward(
+            _join_url(api_base, cypher_path), encrypted, token, bucket, key, "encrypted"
+        )
 
 
 def lambda_handler(event, context):

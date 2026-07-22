@@ -39,8 +39,8 @@ resource "aws_lambda_function" "forwarder" {
 
   environment {
     variables = {
-      SSM_BASE       = local.ssm_base
-      CLIENTS_PREFIX = local.ssm_base
+      STACK_ID       = var.stack_id
+      PARAM_PREFIX   = local.api_prefix
       LANDING_PREFIX = local.landing_prefix
       AWS_ACCOUNT_ID = local.account_id
     }

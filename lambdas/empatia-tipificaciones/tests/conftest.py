@@ -1,7 +1,8 @@
 import os
 
-os.environ.setdefault("AWS_DEFAULT_REGION", "us-east-1")
-os.environ.setdefault("AWS_ACCOUNT_ID", "111122223333")
+os.environ.setdefault("AWS_DEFAULT_REGION", "us-east-2")
+os.environ.setdefault("AWS_ACCOUNT_ID", "575108921774")
+os.environ.setdefault("STACK_ID", "augusta-nexa-dev")
 
 import pytest  # noqa: E402
 

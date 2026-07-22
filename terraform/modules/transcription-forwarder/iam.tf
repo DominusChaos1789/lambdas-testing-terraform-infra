@@ -54,8 +54,8 @@ data "aws_iam_policy_document" "lambda" {
       "ssm:GetParametersByPath",
     ]
     resources = [
-      "arn:aws:ssm:${local.region}:${local.account_id}:parameter${local.ssm_base}",
-      "arn:aws:ssm:${local.region}:${local.account_id}:parameter${local.ssm_base}/*",
+      "arn:aws:ssm:${local.region}:${local.account_id}:parameter${local.api_prefix}",
+      "arn:aws:ssm:${local.region}:${local.account_id}:parameter${local.api_prefix}/*",
     ]
   }
 

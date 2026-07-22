@@ -10,20 +10,30 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 import main
 
-API_BASE = "https://nexa-empatia-staging.nexabpo.com/transcription/api/tipificaciones"
-TOKEN_URL = "https://login-server-staging.nexabpo.com/auth/realms/nexa/token"
-SECRET_NAME = "/augusta-nexa-dev/empatia/api/bdo_detalle"
+TOKEN_HOST = "https://login-server-staging.nexabpo.com"
+TOKEN_PATH = "auth/realms/nexa/protocol/openid-connect/token"
+API_HOST = "https://nexa-empatia-staging.nexabpo.com"
+API_PATH = "transcription/api/tipificaciones"
+FULL_TOKEN_URL = f"{TOKEN_HOST}/{TOKEN_PATH}"
+FULL_PLAIN_URL = f"{API_HOST}/{API_PATH}/banco_occ"
+FULL_CYPHER_URL = f"{API_HOST}/{API_PATH}/bboc_encrip"
+
+SECRET_REL = "empatia/api/bdo-detalle"
+SECRET_FULL = "/augusta-nexa-dev/empatia/api/bdo-detalle"
 CYPHER_KEY = "U5n1nSa2gNqye/Sfo2ZLe9jVfVljcCSKuKkFQk0tBxw="  # throwaway 32-byte AES key
-# 'detalle' was removed from the S3 path; objects land in Hive partitions.
+
 LANDING = "external/transacciones/empatia/transcripciones/"
 FULL_KEY = f"{LANDING}BDO/year=2026/month=07/day=13/call.json"
 
 CLIENT_CFG = {
-    "token_url": TOKEN_URL,
-    "api_base_url": API_BASE,
+    "token_url": TOKEN_HOST,
+    "token_path": TOKEN_PATH,
+    "api_url": API_HOST,
+    "api_path": API_PATH,
     "endpoint_path": "banco_occ",
+    "enpoint_cypher_path": "bboc_encrip",
     "bucket_prefix": f"{LANDING}BDO/",
-    "secret_name": SECRET_NAME,
+    "secret_name": SECRET_REL,
     "enabled": True,
 }
 SECRET_CFG = {
@@ -31,7 +41,7 @@ SECRET_CFG = {
     "client_secret": "s3cr3t",
     "grant_type": "client_credentials",
 }
-SECRET_CFG_ENC = {**SECRET_CFG, "cypher_id": "bboc_encrip", "cypher_code": CYPHER_KEY}
+SECRET_CFG_ENC = {**SECRET_CFG, "cypher_code": CYPHER_KEY}
 TRANSCRIPTION = {"idCall": "123", "documento": "1063228193"}
 
 
@@ -101,14 +111,14 @@ def aes_decrypt(token_b64, key_b64):
 
 @pytest.fixture
 def ssm(monkeypatch):
-    fake = FakeSSM({f"{main.CLIENTS_PREFIX}/BDO": json.dumps(CLIENT_CFG)})
+    fake = FakeSSM({main._client_param_name("BDO"): json.dumps(CLIENT_CFG)})
     monkeypatch.setattr(main, "_ssm", fake)
     return fake
 
 
 @pytest.fixture
 def secrets(monkeypatch):
-    fake = FakeSecrets({SECRET_NAME: json.dumps(SECRET_CFG)})
+    fake = FakeSecrets({SECRET_FULL: json.dumps(SECRET_CFG)})
     monkeypatch.setattr(main, "_secrets", fake)
     return fake
 
@@ -131,6 +141,27 @@ def eventbridge_body(bucket="bucket", key=FULL_KEY):
 
 
 # ---------------------------------------------------------------------------
+# naming / joins
+# ---------------------------------------------------------------------------
+
+
+def test_client_param_name():
+    assert main._client_param_name("BDO") == "/augusta-nexa-dev/empatia/api/bdo-detalle"
+
+
+def test_full_secret_name_prepends_stack_when_relative():
+    assert main._full_secret_name(SECRET_REL) == SECRET_FULL
+
+
+def test_full_secret_name_leaves_absolute_untouched():
+    assert main._full_secret_name("/other/path") == "/other/path"
+
+
+def test_join_url():
+    assert main._join_url(API_HOST, "a/", "/b") == f"{API_HOST}/a/b"
+
+
+# ---------------------------------------------------------------------------
 # config / secret caching
 # ---------------------------------------------------------------------------
 
@@ -149,15 +180,15 @@ def test_get_client_config_refetches_after_ttl(ssm, monkeypatch):
 
 
 def test_get_secret_json_caches(secrets):
-    assert main._get_secret_json(SECRET_NAME) == SECRET_CFG
-    assert main._get_secret_json(SECRET_NAME) == SECRET_CFG
-    assert secrets.calls == [SECRET_NAME]
+    assert main._get_secret_json(SECRET_FULL) == SECRET_CFG
+    assert main._get_secret_json(SECRET_FULL) == SECRET_CFG
+    assert secrets.calls == [SECRET_FULL]
 
 
 def test_get_secret_json_refetches_after_ttl(secrets, monkeypatch):
     monkeypatch.setattr(main, "CONFIG_TTL", 0)
-    main._get_secret_json(SECRET_NAME)
-    main._get_secret_json(SECRET_NAME)
+    main._get_secret_json(SECRET_FULL)
+    main._get_secret_json(SECRET_FULL)
     assert len(secrets.calls) == 2
 
 
@@ -174,7 +205,7 @@ def test_encrypt_payload_roundtrips():
 def test_encrypt_payload_uses_random_iv():
     a = main._encrypt_payload(TRANSCRIPTION, CYPHER_KEY)
     b = main._encrypt_payload(TRANSCRIPTION, CYPHER_KEY)
-    assert a != b  # different IV each call
+    assert a != b
     assert aes_decrypt(a, CYPHER_KEY) == aes_decrypt(b, CYPHER_KEY)
 
 
@@ -226,14 +257,14 @@ def test_get_access_token_uses_secret_credentials(monkeypatch):
 
     monkeypatch.setattr(main.urllib.request, "urlopen", fake_urlopen)
 
-    assert main._get_access_token(CLIENT_CFG, SECRET_CFG) == "tok"
-    assert captured["req"].full_url == TOKEN_URL
+    assert main._get_access_token(FULL_TOKEN_URL, SECRET_CFG, SECRET_FULL) == "tok"
+    assert captured["req"].full_url == FULL_TOKEN_URL
     assert "client_id=Connection.Apis.Auth" in captured["data"]
     assert "grant_type=client_credentials" in captured["data"]
 
 
 def test_get_access_token_cached_per_secret(monkeypatch):
-    main._token_cache[SECRET_NAME] = {
+    main._token_cache[SECRET_FULL] = {
         "access_token": "cached",
         "expires_at": time.time() + 3600,
     }
@@ -242,25 +273,24 @@ def test_get_access_token_cached_per_secret(monkeypatch):
         raise AssertionError("should not call token endpoint when cached")
 
     monkeypatch.setattr(main.urllib.request, "urlopen", fake_urlopen)
-    assert main._get_access_token(CLIENT_CFG, SECRET_CFG) == "cached"
+    assert main._get_access_token(FULL_TOKEN_URL, SECRET_CFG, SECRET_FULL) == "cached"
 
 
 def test_get_access_token_separate_cache_per_client(monkeypatch):
-    main._token_cache[SECRET_NAME] = {
+    main._token_cache[SECRET_FULL] = {
         "access_token": "bdo-token",
         "expires_at": time.time() + 3600,
     }
-    other_cfg = {
-        **CLIENT_CFG,
-        "secret_name": "/augusta-nexa-dev/empatia/api/bdb_detalle",
-    }
+    other_key = "/augusta-nexa-dev/empatia/api/bdb-detalle"
 
     def fake_urlopen(req, timeout=None):
         return FakeResponse(200, json.dumps({"access_token": "bdb-token"}).encode())
 
     monkeypatch.setattr(main.urllib.request, "urlopen", fake_urlopen)
-    assert main._get_access_token(other_cfg, SECRET_CFG) == "bdb-token"
-    assert main._get_access_token(CLIENT_CFG, SECRET_CFG) == "bdo-token"
+    assert main._get_access_token(FULL_TOKEN_URL, SECRET_CFG, other_key) == "bdb-token"
+    assert (
+        main._get_access_token(FULL_TOKEN_URL, SECRET_CFG, SECRET_FULL) == "bdo-token"
+    )
 
 
 def test_get_access_token_default_expiry(monkeypatch):
@@ -269,8 +299,8 @@ def test_get_access_token_default_expiry(monkeypatch):
 
     monkeypatch.setattr(main.urllib.request, "urlopen", fake_urlopen)
     before = time.time()
-    main._get_access_token(CLIENT_CFG, SECRET_CFG)
-    assert main._token_cache[SECRET_NAME]["expires_at"] >= before + 269
+    main._get_access_token(FULL_TOKEN_URL, SECRET_CFG, SECRET_FULL)
+    assert main._token_cache[SECRET_FULL]["expires_at"] >= before + 269
 
 
 def test_get_access_token_defaults_grant_type(monkeypatch):
@@ -281,7 +311,9 @@ def test_get_access_token_defaults_grant_type(monkeypatch):
         return FakeResponse(200, json.dumps({"access_token": "tok"}).encode())
 
     monkeypatch.setattr(main.urllib.request, "urlopen", fake_urlopen)
-    main._get_access_token(CLIENT_CFG, {"client_id": "id", "client_secret": "s"})
+    main._get_access_token(
+        FULL_TOKEN_URL, {"client_id": "id", "client_secret": "s"}, "k"
+    )
     assert "grant_type=client_credentials" in captured["data"]
 
 
@@ -298,10 +330,10 @@ def test_post_json_success(monkeypatch):
         return FakeResponse(201, b'{"ok": true}')
 
     monkeypatch.setattr(main.urllib.request, "urlopen", fake_urlopen)
-    status, _ = main._post_json(API_BASE, "banco_occ", {"a": 1}, "tok")
+    status, _ = main._post_json(FULL_PLAIN_URL, {"a": 1}, "tok")
 
     assert status == 201
-    assert captured["req"].full_url == f"{API_BASE}/banco_occ"
+    assert captured["req"].full_url == FULL_PLAIN_URL
     assert captured["req"].get_header("Authorization") == "Bearer tok"
 
 
@@ -310,7 +342,7 @@ def test_post_json_http_error(monkeypatch):
         raise http_error(500, b"boom")
 
     monkeypatch.setattr(main.urllib.request, "urlopen", fake_urlopen)
-    status, body = main._post_json(API_BASE, "banco_occ", {"a": 1}, "tok")
+    status, body = main._post_json(FULL_PLAIN_URL, {"a": 1}, "tok")
 
     assert status == 500
     assert body == "boom"
@@ -327,6 +359,11 @@ def test_client_key_from_object_key_strips_landing_prefix():
 
 def test_client_key_from_object_key_without_prefix():
     assert main._client_key_from_object_key("BDO/year=2026/x.json") == "BDO"
+
+
+def test_cypher_path_tolerates_correct_spelling():
+    assert main._cypher_path({"endpoint_cypher_path": "x"}) == "x"
+    assert main._cypher_path({}) is None
 
 
 def test_read_s3_json(s3):
@@ -387,31 +424,28 @@ def test_process_object_rejects_key_outside_bucket_prefix(ssm, s3):
 
 
 def test_process_object_plain_only_when_no_cypher(monkeypatch, ssm, secrets, s3):
-    monkeypatch.setattr(main, "_get_access_token", lambda cfg, creds: "tok")
+    monkeypatch.setattr(main, "_get_access_token", lambda url, creds, key: "tok")
     posted = []
     monkeypatch.setattr(
-        main,
-        "_post_json",
-        lambda base, suffix, body, tok: posted.append(suffix) or (200, "{}"),
+        main, "_post_json", lambda url, body, tok: posted.append(url) or (200, "{}")
     )
     main._process_object("bucket", FULL_KEY)
-    assert posted == ["banco_occ"]
+    assert posted == [FULL_PLAIN_URL]
 
 
 def test_process_object_plain_and_encrypted(monkeypatch, ssm, secrets, s3):
-    secrets.secrets[SECRET_NAME] = json.dumps(SECRET_CFG_ENC)
-    monkeypatch.setattr(main, "_get_access_token", lambda cfg, creds: "tok")
+    secrets.secrets[SECRET_FULL] = json.dumps(SECRET_CFG_ENC)
+    monkeypatch.setattr(main, "_get_access_token", lambda url, creds, key: "tok")
     posted = []
 
-    def fake_post(base, suffix, body, tok):
-        posted.append((suffix, body))
+    def fake_post(url, body, tok):
+        posted.append((url, body))
         return 200, "{}"
 
     monkeypatch.setattr(main, "_post_json", fake_post)
     main._process_object("bucket", FULL_KEY)
 
-    assert [p[0] for p in posted] == ["banco_occ", "bboc_encrip"]
-    # plaintext body is the raw transcription; encrypted body wraps ciphertext
+    assert [p[0] for p in posted] == [FULL_PLAIN_URL, FULL_CYPHER_URL]
     assert posted[0][1] == TRANSCRIPTION
     assert set(posted[1][1]) == {"payload"}
     assert aes_decrypt(posted[1][1]["payload"], CYPHER_KEY) == TRANSCRIPTION
@@ -420,24 +454,24 @@ def test_process_object_plain_and_encrypted(monkeypatch, ssm, secrets, s3):
 def test_process_object_allows_missing_bucket_prefix(monkeypatch, secrets, s3):
     cfg = {k: v for k, v in CLIENT_CFG.items() if k != "bucket_prefix"}
     monkeypatch.setattr(main, "_get_client_config", lambda key: cfg)
-    monkeypatch.setattr(main, "_get_access_token", lambda c, creds: "tok")
+    monkeypatch.setattr(main, "_get_access_token", lambda url, creds, key: "tok")
     monkeypatch.setattr(main, "_post_json", lambda *a: (200, "{}"))
     main._process_object("bucket", FULL_KEY)  # no exception
 
 
 def test_process_object_raises_on_plain_api_error(monkeypatch, ssm, secrets, s3):
-    monkeypatch.setattr(main, "_get_access_token", lambda c, creds: "tok")
+    monkeypatch.setattr(main, "_get_access_token", lambda url, creds, key: "tok")
     monkeypatch.setattr(main, "_post_json", lambda *a: (502, "bad gateway"))
     with pytest.raises(RuntimeError, match="502 .plain."):
         main._process_object("bucket", FULL_KEY)
 
 
 def test_process_object_raises_on_encrypted_api_error(monkeypatch, ssm, secrets, s3):
-    secrets.secrets[SECRET_NAME] = json.dumps(SECRET_CFG_ENC)
-    monkeypatch.setattr(main, "_get_access_token", lambda c, creds: "tok")
+    secrets.secrets[SECRET_FULL] = json.dumps(SECRET_CFG_ENC)
+    monkeypatch.setattr(main, "_get_access_token", lambda url, creds, key: "tok")
 
-    def fake_post(base, suffix, body, tok):
-        return (200, "{}") if suffix == "banco_occ" else (500, "boom")
+    def fake_post(url, body, tok):
+        return (200, "{}") if url == FULL_PLAIN_URL else (500, "boom")
 
     monkeypatch.setattr(main, "_post_json", fake_post)
     with pytest.raises(RuntimeError, match="500 .encrypted."):
@@ -450,7 +484,7 @@ def test_process_object_raises_on_encrypted_api_error(monkeypatch, ssm, secrets,
 
 
 def test_handler_success(monkeypatch, ssm, secrets, s3):
-    monkeypatch.setattr(main, "_get_access_token", lambda c, creds: "tok")
+    monkeypatch.setattr(main, "_get_access_token", lambda url, creds, key: "tok")
     monkeypatch.setattr(main, "_post_json", lambda *a: (200, "{}"))
     event = {"Records": [{"messageId": "m1", "body": eventbridge_body()}]}
     assert main.lambda_handler(event, None) == {"batchItemFailures": []}

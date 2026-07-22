@@ -27,21 +27,25 @@ variable "manage_bucket_notification" {
 
 variable "clients" {
   type = map(object({
-    token_url     = string
-    api_base_url  = string
-    endpoint_path = string
-    secret_name   = optional(string)
-    enabled       = optional(bool, true)
+    token_url           = string           # host, e.g. https://login-server-staging.nexabpo.com
+    token_path          = string           # auth/realms/nexa/protocol/openid-connect/token
+    api_url             = string           # host, e.g. https://nexa-empatia-staging.nexabpo.com
+    api_path            = string           # transcription/api/tipificaciones
+    endpoint_path       = string           # banco_occ
+    enpoint_cypher_path = optional(string) # bboc_encrip (sic - matches config key)
+    secret_name         = optional(string) # relative, e.g. empatia/api/bdo-detalle
+    enabled             = optional(bool, true)
   }))
   description = <<-EOT
     Map of client_key => config. The client_key is the S3 folder under the landing
-    prefix (e.g. "BDO"); endpoint_path is the last segment of the API URL (e.g.
-    "banco_occ") -- they are intentionally decoupled.
+    prefix (e.g. "BDO") and maps to the parameter/secret "<lower key>-detalle".
+    endpoint_path / enpoint_cypher_path are the last URL segments (decoupled from
+    the folder name).
 
     Credentials are NOT stored here: each client reads them from a Secrets Manager
-    secret. secret_name defaults to /<stack_id>/empatia/api/<lowercase key>_detalle
-    (e.g. BDO -> /augusta-nexa-dev/empatia/api/bdo_detalle). The secret must already
-    exist; this module only reads it.
+    secret that must already exist. secret_name is environment-relative (no stack
+    prefix) and defaults to empatia/api/<lower key>-detalle; the Lambda prepends
+    /<stack_id>/ at runtime.
   EOT
 }
 
