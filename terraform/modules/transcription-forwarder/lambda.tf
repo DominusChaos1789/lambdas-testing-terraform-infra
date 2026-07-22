@@ -1,8 +1,24 @@
-# Zero external dependencies -> zip just the handler (boto3 is in the runtime).
+# The handler needs `cryptography` (native wheels), so build.py fetches the
+# Linux (Amazon Linux) wheels into build/ and copies main.py alongside. It runs
+# on apply whenever main.py or the deps change.
+resource "null_resource" "build" {
+  triggers = {
+    main         = filemd5("${var.lambda_source_dir}/main.py")
+    requirements = filemd5("${var.lambda_source_dir}/requirements.txt")
+    build        = filemd5("${var.lambda_source_dir}/build.py")
+  }
+
+  provisioner "local-exec" {
+    command = "${var.build_python} \"${var.lambda_source_dir}/build.py\""
+  }
+}
+
+# depends_on defers this read until after the build runs on apply.
 data "archive_file" "lambda" {
   type        = "zip"
-  source_file = "${var.lambda_source_dir}/main.py"
+  source_dir  = "${var.lambda_source_dir}/build"
   output_path = "${path.module}/.build/${local.name}-forwarder.zip"
+  depends_on  = [null_resource.build]
 }
 
 resource "aws_cloudwatch_log_group" "lambda" {

@@ -9,7 +9,7 @@ segment `dev` is the environment):
 | Thing | Value |
 | --- | --- |
 | Landing bucket | `<stack_id>-providers-landing` → `augusta-nexa-dev-providers-landing` |
-| S3 landing prefix | `external/transacciones/empatia/transcripciones/detalle/` |
+| S3 landing prefix | `external/transacciones/empatia/transcripciones/` |
 | SSM base path | `/<stack_id>/empatia/transcripciones/detalle` → `/augusta-nexa-dev/empatia/transcripciones/detalle` |
 
 ```
@@ -19,7 +19,7 @@ Accenture account                Our account
 └──────────────┘             │        -landing            │
                              └──────────────┬─────────────┘
                               Object Created │  key: external/transacciones/empatia/
-                                             │  transcripciones/detalle/BDO/year=…/…
+                                             │  transcripciones/BDO/year=…/…
                                              ▼
                                      ┌──────────────┐
                                      │ EventBridge  │  (rule: <prefix>/<client>/ )
@@ -59,7 +59,7 @@ Terraform state.**
 
 | Store | Path | Holds |
 | --- | --- | --- |
-| Secrets Manager | `/augusta-nexa-dev/empatia/api/<client>_detalle` | `client_id`, `client_secret`, `grant_type` |
+| Secrets Manager | `/augusta-nexa-dev/empatia/api/<client>_detalle` | `client_id`, `client_secret`, `grant_type`, and (optional) `cypher_id`, `cypher_code` |
 | Parameter Store | `/augusta-nexa-dev/empatia/transcripciones/detalle/<CLIENT>` | `token_url`, `api_base_url`, `endpoint_path`, `bucket_prefix`, `secret_name`, `enabled` |
 
 ### 1. Credentials — Secrets Manager (one secret per client)
@@ -71,7 +71,9 @@ Name: `/augusta-nexa-dev/empatia/api/bdo_detalle` (encrypted with the
 {
   "client_id": "Connection.Apis.Auth",
   "client_secret": "REPLACE_WITH_REAL_CLIENT_SECRET",
-  "grant_type": "client_credentials"
+  "grant_type": "client_credentials",
+  "cypher_id": "bboc_encrip",
+  "cypher_code": "REPLACE_WITH_BASE64_AES256_KEY"
 }
 ```
 
@@ -88,7 +90,7 @@ from the `clients` map.
   "token_url": "https://login-server-staging.nexabpo.com/auth/realms/nexa/protocol/openid-connect/token",
   "api_base_url": "https://nexa-empatia-staging.nexabpo.com/transcription/api/tipificaciones",
   "endpoint_path": "banco_occ",
-  "bucket_prefix": "external/transacciones/empatia/transcripciones/detalle/BDO/",
+  "bucket_prefix": "external/transacciones/empatia/transcripciones/BDO/",
   "secret_name": "/augusta-nexa-dev/empatia/api/bdo_detalle",
   "enabled": true
 }
@@ -108,21 +110,34 @@ from the `clients` map.
 ## How one file flows end to end
 
 ```
-S3 key:  external/transacciones/empatia/transcripciones/detalle/BDO/year=2026/month=07/day=13/call.json
+S3 key:  external/transacciones/empatia/transcripciones/BDO/year=2026/month=07/day=13/call.json
          └──────────────── landing prefix ───────────────┘└┬┘
                                                client_key ─┘ = "BDO"
                                                             │
 SSM   :  /augusta-nexa-dev/empatia/transcripciones/detalle/BDO
              ├─ bucket_prefix  -> verify the key belongs to this client
              ├─ secret_name    -> /augusta-nexa-dev/empatia/api/bdo_detalle
-             │                     └─ Secrets Manager: client_id / client_secret / grant_type
+             │      └─ Secrets Manager: client_id / client_secret / grant_type
+             │                          + cypher_id / cypher_code (optional)
              ├─ token_url      -> POST creds -> access_token   (cached per secret)
              └─ api_base_url + "/" + endpoint_path
                                                             │
-POST  :  https://nexa-empatia-staging.nexabpo.com/transcription/api/tipificaciones/banco_occ
+POST 1 : .../tipificaciones/banco_occ         <- plaintext payload
+POST 2 : .../tipificaciones/bboc_encrip       <- {"payload": AES-256(payload)}   (only if cypher_* set)
 ```
 
 Tokens are cached **per secret**, so clients never share each other's tokens.
+
+### Encrypted delivery
+
+When the client's secret defines `cypher_id` and `cypher_code`, the Lambda also
+POSTs an encrypted copy to `api_base_url + "/" + cypher_id` as
+`{"payload": "<base64>"}`. `cypher_code` is a base64 AES-256 key.
+
+> ⚠️ The cipher is **AES-256-CBC** (random 16-byte IV prepended, PKCS7 padding,
+> standard base64) — see `_encrypt_payload` in `main.py`. This must match what
+> the EmpatIA endpoint decrypts with; if it expects AES-GCM / Fernet / a fixed
+> IV, change only that function.
 
 ---
 
@@ -151,14 +166,14 @@ No secrets are passed to Terraform — it only creates the routing parameters fr
 # Create / rotate a client's credentials (Secrets Manager)
 aws secretsmanager put-secret-value \
   --secret-id "/augusta-nexa-dev/empatia/api/bdo_detalle" \
-  --secret-string '{"client_id":"Connection.Apis.Auth","client_secret":"REAL_SECRET_HERE","grant_type":"client_credentials"}'
+  --secret-string '{"client_id":"Connection.Apis.Auth","client_secret":"REAL_SECRET_HERE","grant_type":"client_credentials","cypher_id":"bboc_encrip","cypher_code":"BASE64_AES256_KEY"}'
 
 # BDO (Banco de Occidente) -> banco_occ routing (normally Terraform-managed)
 aws ssm put-parameter \
   --name "/augusta-nexa-dev/empatia/transcripciones/detalle/BDO" \
   --type String \
   --overwrite \
-  --value '{"token_url":"https://login-server-staging.nexabpo.com/auth/realms/nexa/protocol/openid-connect/token","api_base_url":"https://nexa-empatia-staging.nexabpo.com/transcription/api/tipificaciones","endpoint_path":"banco_occ","bucket_prefix":"external/transacciones/empatia/transcripciones/detalle/BDO/","secret_name":"/augusta-nexa-dev/empatia/api/bdo_detalle","enabled":true}'
+  --value '{"token_url":"https://login-server-staging.nexabpo.com/auth/realms/nexa/protocol/openid-connect/token","api_base_url":"https://nexa-empatia-staging.nexabpo.com/transcription/api/tipificaciones","endpoint_path":"banco_occ","bucket_prefix":"external/transacciones/empatia/transcripciones/BDO/","secret_name":"/augusta-nexa-dev/empatia/api/bdo_detalle","enabled":true}'
 ```
 
 The Lambda caches parameters in memory for `CONFIG_TTL_SECONDS` (default 300s),
@@ -183,7 +198,7 @@ so a manual change is picked up within ~5 minutes without a redeploy.
    ```
 2. `terraform apply` — creates `/augusta-nexa-dev/empatia/transcripciones/detalle/BDB`
    and extends the EventBridge rule to route the
-   `external/transacciones/empatia/transcripciones/detalle/BDB/` prefix.
+   `external/transacciones/empatia/transcripciones/BDB/` prefix.
 3. Providers drop files under `.../detalle/BDB/...`. **No Lambda change or redeploy.**
 
 ---
@@ -193,7 +208,7 @@ so a manual change is picked up within ~5 minutes without a redeploy.
 **Option A — drop a file in S3** (full end-to-end):
 ```bash
 aws s3 cp sample.json \
-  s3://augusta-nexa-dev-providers-landing/external/transacciones/empatia/transcripciones/detalle/BDO/2026/07/13/sample.json
+  s3://augusta-nexa-dev-providers-landing/external/transacciones/empatia/transcripciones/BDO/2026/07/13/sample.json
 ```
 
 **Option B — console test event**: use

@@ -1,18 +1,21 @@
+import base64
 import json
 import time
 import urllib.error
 from io import BytesIO
 
 import pytest
+from cryptography.hazmat.primitives import padding as sym_padding
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 import main
 
 API_BASE = "https://nexa-empatia-staging.nexabpo.com/transcription/api/tipificaciones"
 TOKEN_URL = "https://login-server-staging.nexabpo.com/auth/realms/nexa/token"
 SECRET_NAME = "/augusta-nexa-dev/empatia/api/bdo_detalle"
-# S3 folder is "BDO"; it maps (via SSM) to the "banco_occ" endpoint.
-# Objects land in Hive-partitioned folders under an "external/" root.
-LANDING = "external/transacciones/empatia/transcripciones/detalle/"
+CYPHER_KEY = "U5n1nSa2gNqye/Sfo2ZLe9jVfVljcCSKuKkFQk0tBxw="  # throwaway 32-byte AES key
+# 'detalle' was removed from the S3 path; objects land in Hive partitions.
+LANDING = "external/transacciones/empatia/transcripciones/"
 FULL_KEY = f"{LANDING}BDO/year=2026/month=07/day=13/call.json"
 
 CLIENT_CFG = {
@@ -28,6 +31,7 @@ SECRET_CFG = {
     "client_secret": "s3cr3t",
     "grant_type": "client_credentials",
 }
+SECRET_CFG_ENC = {**SECRET_CFG, "cypher_id": "bboc_encrip", "cypher_code": CYPHER_KEY}
 TRANSCRIPTION = {"idCall": "123", "documento": "1063228193"}
 
 
@@ -86,6 +90,15 @@ def http_error(code, body_bytes):
     )
 
 
+def aes_decrypt(token_b64, key_b64):
+    raw = base64.b64decode(token_b64)
+    iv, ct = raw[:16], raw[16:]
+    dec = Cipher(algorithms.AES(base64.b64decode(key_b64)), modes.CBC(iv)).decryptor()
+    padded = dec.update(ct) + dec.finalize()
+    unpadder = sym_padding.PKCS7(algorithms.AES.block_size).unpadder()
+    return json.loads((unpadder.update(padded) + unpadder.finalize()).decode())
+
+
 @pytest.fixture
 def ssm(monkeypatch):
     fake = FakeSSM({f"{main.CLIENTS_PREFIX}/BDO": json.dumps(CLIENT_CFG)})
@@ -118,14 +131,14 @@ def eventbridge_body(bucket="bucket", key=FULL_KEY):
 
 
 # ---------------------------------------------------------------------------
-# SSM parameter caching
+# config / secret caching
 # ---------------------------------------------------------------------------
 
 
 def test_get_client_config_caches(ssm):
     assert main._get_client_config("BDO") == CLIENT_CFG
     assert main._get_client_config("BDO") == CLIENT_CFG
-    assert len(ssm.calls) == 1  # second call served from cache
+    assert len(ssm.calls) == 1
 
 
 def test_get_client_config_refetches_after_ttl(ssm, monkeypatch):
@@ -135,15 +148,10 @@ def test_get_client_config_refetches_after_ttl(ssm, monkeypatch):
     assert len(ssm.calls) == 2
 
 
-# ---------------------------------------------------------------------------
-# Secrets Manager
-# ---------------------------------------------------------------------------
-
-
 def test_get_secret_json_caches(secrets):
     assert main._get_secret_json(SECRET_NAME) == SECRET_CFG
     assert main._get_secret_json(SECRET_NAME) == SECRET_CFG
-    assert secrets.calls == [SECRET_NAME]  # cached on the second call
+    assert secrets.calls == [SECRET_NAME]
 
 
 def test_get_secret_json_refetches_after_ttl(secrets, monkeypatch):
@@ -151,6 +159,23 @@ def test_get_secret_json_refetches_after_ttl(secrets, monkeypatch):
     main._get_secret_json(SECRET_NAME)
     main._get_secret_json(SECRET_NAME)
     assert len(secrets.calls) == 2
+
+
+# ---------------------------------------------------------------------------
+# _encrypt_payload
+# ---------------------------------------------------------------------------
+
+
+def test_encrypt_payload_roundtrips():
+    token = main._encrypt_payload(TRANSCRIPTION, CYPHER_KEY)
+    assert aes_decrypt(token, CYPHER_KEY) == TRANSCRIPTION
+
+
+def test_encrypt_payload_uses_random_iv():
+    a = main._encrypt_payload(TRANSCRIPTION, CYPHER_KEY)
+    b = main._encrypt_payload(TRANSCRIPTION, CYPHER_KEY)
+    assert a != b  # different IV each call
+    assert aes_decrypt(a, CYPHER_KEY) == aes_decrypt(b, CYPHER_KEY)
 
 
 # ---------------------------------------------------------------------------
@@ -173,10 +198,10 @@ def test_validate_url_allows_https_nexabpo(url):
 @pytest.mark.parametrize(
     "url",
     [
-        "http://nexa-empatia-staging.nexabpo.com/api",  # not https
-        "https://evil.example.com/api",  # host not allowlisted
-        "file:///etc/passwd",  # non-http scheme, no host
-        "https://nexabpo.com.attacker.com/api",  # suffix spoof
+        "http://nexa-empatia-staging.nexabpo.com/api",
+        "https://evil.example.com/api",
+        "file:///etc/passwd",
+        "https://nexabpo.com.attacker.com/api",
     ],
 )
 def test_validate_url_rejects(url):
@@ -189,7 +214,7 @@ def test_validate_url_rejects(url):
 # ---------------------------------------------------------------------------
 
 
-def test_get_access_token_uses_secret_credentials(secrets, monkeypatch):
+def test_get_access_token_uses_secret_credentials(monkeypatch):
     captured = {}
 
     def fake_urlopen(req, timeout=None):
@@ -201,13 +226,13 @@ def test_get_access_token_uses_secret_credentials(secrets, monkeypatch):
 
     monkeypatch.setattr(main.urllib.request, "urlopen", fake_urlopen)
 
-    assert main._get_access_token(CLIENT_CFG) == "tok"
+    assert main._get_access_token(CLIENT_CFG, SECRET_CFG) == "tok"
     assert captured["req"].full_url == TOKEN_URL
     assert "client_id=Connection.Apis.Auth" in captured["data"]
     assert "grant_type=client_credentials" in captured["data"]
 
 
-def test_get_access_token_cached_per_secret(secrets, monkeypatch):
+def test_get_access_token_cached_per_secret(monkeypatch):
     main._token_cache[SECRET_NAME] = {
         "access_token": "cached",
         "expires_at": time.time() + 3600,
@@ -217,42 +242,38 @@ def test_get_access_token_cached_per_secret(secrets, monkeypatch):
         raise AssertionError("should not call token endpoint when cached")
 
     monkeypatch.setattr(main.urllib.request, "urlopen", fake_urlopen)
-    assert main._get_access_token(CLIENT_CFG) == "cached"
+    assert main._get_access_token(CLIENT_CFG, SECRET_CFG) == "cached"
 
 
-def test_get_access_token_separate_cache_per_client(secrets, monkeypatch):
-    """A cached token for one client must not be reused by another."""
+def test_get_access_token_separate_cache_per_client(monkeypatch):
     main._token_cache[SECRET_NAME] = {
         "access_token": "bdo-token",
         "expires_at": time.time() + 3600,
     }
-    other_secret = "/augusta-nexa-dev/empatia/api/bdb_detalle"
-    secrets.secrets[other_secret] = json.dumps(SECRET_CFG)
-    other_cfg = {**CLIENT_CFG, "secret_name": other_secret}
+    other_cfg = {
+        **CLIENT_CFG,
+        "secret_name": "/augusta-nexa-dev/empatia/api/bdb_detalle",
+    }
 
     def fake_urlopen(req, timeout=None):
         return FakeResponse(200, json.dumps({"access_token": "bdb-token"}).encode())
 
     monkeypatch.setattr(main.urllib.request, "urlopen", fake_urlopen)
+    assert main._get_access_token(other_cfg, SECRET_CFG) == "bdb-token"
+    assert main._get_access_token(CLIENT_CFG, SECRET_CFG) == "bdo-token"
 
-    assert main._get_access_token(other_cfg) == "bdb-token"
-    assert main._get_access_token(CLIENT_CFG) == "bdo-token"
 
-
-def test_get_access_token_default_expiry(secrets, monkeypatch):
+def test_get_access_token_default_expiry(monkeypatch):
     def fake_urlopen(req, timeout=None):
         return FakeResponse(200, json.dumps({"access_token": "tok"}).encode())
 
     monkeypatch.setattr(main.urllib.request, "urlopen", fake_urlopen)
     before = time.time()
-    main._get_access_token(CLIENT_CFG)
+    main._get_access_token(CLIENT_CFG, SECRET_CFG)
     assert main._token_cache[SECRET_NAME]["expires_at"] >= before + 269
 
 
-def test_get_access_token_defaults_grant_type(secrets, monkeypatch):
-    secrets.secrets[SECRET_NAME] = json.dumps(
-        {"client_id": "id", "client_secret": "s"}  # no grant_type
-    )
+def test_get_access_token_defaults_grant_type(monkeypatch):
     captured = {}
 
     def fake_urlopen(req, timeout=None):
@@ -260,16 +281,16 @@ def test_get_access_token_defaults_grant_type(secrets, monkeypatch):
         return FakeResponse(200, json.dumps({"access_token": "tok"}).encode())
 
     monkeypatch.setattr(main.urllib.request, "urlopen", fake_urlopen)
-    main._get_access_token(CLIENT_CFG)
+    main._get_access_token(CLIENT_CFG, {"client_id": "id", "client_secret": "s"})
     assert "grant_type=client_credentials" in captured["data"]
 
 
 # ---------------------------------------------------------------------------
-# _post_transcription
+# _post_json
 # ---------------------------------------------------------------------------
 
 
-def test_post_transcription_success(monkeypatch):
+def test_post_json_success(monkeypatch):
     captured = {}
 
     def fake_urlopen(req, timeout=None):
@@ -277,19 +298,19 @@ def test_post_transcription_success(monkeypatch):
         return FakeResponse(201, b'{"ok": true}')
 
     monkeypatch.setattr(main.urllib.request, "urlopen", fake_urlopen)
-    status, _ = main._post_transcription(CLIENT_CFG, TRANSCRIPTION, "tok")
+    status, _ = main._post_json(API_BASE, "banco_occ", {"a": 1}, "tok")
 
     assert status == 201
     assert captured["req"].full_url == f"{API_BASE}/banco_occ"
     assert captured["req"].get_header("Authorization") == "Bearer tok"
 
 
-def test_post_transcription_http_error(monkeypatch):
+def test_post_json_http_error(monkeypatch):
     def fake_urlopen(req, timeout=None):
         raise http_error(500, b"boom")
 
     monkeypatch.setattr(main.urllib.request, "urlopen", fake_urlopen)
-    status, body = main._post_transcription(CLIENT_CFG, TRANSCRIPTION, "tok")
+    status, body = main._post_json(API_BASE, "banco_occ", {"a": 1}, "tok")
 
     assert status == 500
     assert body == "boom"
@@ -305,7 +326,7 @@ def test_client_key_from_object_key_strips_landing_prefix():
 
 
 def test_client_key_from_object_key_without_prefix():
-    assert main._client_key_from_object_key("BDO/2026/x.json") == "BDO"
+    assert main._client_key_from_object_key("BDO/year=2026/x.json") == "BDO"
 
 
 def test_read_s3_json(s3):
@@ -315,7 +336,7 @@ def test_read_s3_json(s3):
 def test_read_s3_json_passes_expected_bucket_owner(s3):
     main._read_s3_json("bucket", FULL_KEY)
     assert s3.last_kwargs["ExpectedBucketOwner"] == main.AWS_ACCOUNT_ID
-    assert main.AWS_ACCOUNT_ID  # non-empty in the test environment
+    assert main.AWS_ACCOUNT_ID
 
 
 def test_iter_s3_events_eventbridge():
@@ -356,31 +377,70 @@ def test_process_object_disabled_client(monkeypatch, s3):
     monkeypatch.setattr(main, "_read_s3_json", lambda *a: called.append(a))
 
     main._process_object("bucket", FULL_KEY)
-    assert called == []  # short-circuits before reading the object
+    assert called == []
 
 
 def test_process_object_rejects_key_outside_bucket_prefix(ssm, s3):
-    # Resolves to client "BDO" but sits outside BDO's configured bucket_prefix
-    # (it is not under the landing prefix at all).
-    stray = "BDO/2026/07/13/call.json"
+    stray = "BDO/year=2026/month=07/day=13/call.json"  # not under landing prefix
     with pytest.raises(RuntimeError, match="outside bucket_prefix"):
         main._process_object("bucket", stray)
 
 
-def test_process_object_allows_missing_bucket_prefix(monkeypatch, s3):
+def test_process_object_plain_only_when_no_cypher(monkeypatch, ssm, secrets, s3):
+    monkeypatch.setattr(main, "_get_access_token", lambda cfg, creds: "tok")
+    posted = []
+    monkeypatch.setattr(
+        main,
+        "_post_json",
+        lambda base, suffix, body, tok: posted.append(suffix) or (200, "{}"),
+    )
+    main._process_object("bucket", FULL_KEY)
+    assert posted == ["banco_occ"]
+
+
+def test_process_object_plain_and_encrypted(monkeypatch, ssm, secrets, s3):
+    secrets.secrets[SECRET_NAME] = json.dumps(SECRET_CFG_ENC)
+    monkeypatch.setattr(main, "_get_access_token", lambda cfg, creds: "tok")
+    posted = []
+
+    def fake_post(base, suffix, body, tok):
+        posted.append((suffix, body))
+        return 200, "{}"
+
+    monkeypatch.setattr(main, "_post_json", fake_post)
+    main._process_object("bucket", FULL_KEY)
+
+    assert [p[0] for p in posted] == ["banco_occ", "bboc_encrip"]
+    # plaintext body is the raw transcription; encrypted body wraps ciphertext
+    assert posted[0][1] == TRANSCRIPTION
+    assert set(posted[1][1]) == {"payload"}
+    assert aes_decrypt(posted[1][1]["payload"], CYPHER_KEY) == TRANSCRIPTION
+
+
+def test_process_object_allows_missing_bucket_prefix(monkeypatch, secrets, s3):
     cfg = {k: v for k, v in CLIENT_CFG.items() if k != "bucket_prefix"}
     monkeypatch.setattr(main, "_get_client_config", lambda key: cfg)
-    monkeypatch.setattr(main, "_get_access_token", lambda c: "tok")
-    monkeypatch.setattr(main, "_post_transcription", lambda *a: (200, "{}"))
-
+    monkeypatch.setattr(main, "_get_access_token", lambda c, creds: "tok")
+    monkeypatch.setattr(main, "_post_json", lambda *a: (200, "{}"))
     main._process_object("bucket", FULL_KEY)  # no exception
 
 
-def test_process_object_raises_on_api_error(monkeypatch, ssm, secrets, s3):
-    monkeypatch.setattr(main, "_get_access_token", lambda c: "tok")
-    monkeypatch.setattr(main, "_post_transcription", lambda *a: (502, "bad gateway"))
+def test_process_object_raises_on_plain_api_error(monkeypatch, ssm, secrets, s3):
+    monkeypatch.setattr(main, "_get_access_token", lambda c, creds: "tok")
+    monkeypatch.setattr(main, "_post_json", lambda *a: (502, "bad gateway"))
+    with pytest.raises(RuntimeError, match="502 .plain."):
+        main._process_object("bucket", FULL_KEY)
 
-    with pytest.raises(RuntimeError, match="502"):
+
+def test_process_object_raises_on_encrypted_api_error(monkeypatch, ssm, secrets, s3):
+    secrets.secrets[SECRET_NAME] = json.dumps(SECRET_CFG_ENC)
+    monkeypatch.setattr(main, "_get_access_token", lambda c, creds: "tok")
+
+    def fake_post(base, suffix, body, tok):
+        return (200, "{}") if suffix == "banco_occ" else (500, "boom")
+
+    monkeypatch.setattr(main, "_post_json", fake_post)
+    with pytest.raises(RuntimeError, match="500 .encrypted."):
         main._process_object("bucket", FULL_KEY)
 
 
@@ -390,9 +450,8 @@ def test_process_object_raises_on_api_error(monkeypatch, ssm, secrets, s3):
 
 
 def test_handler_success(monkeypatch, ssm, secrets, s3):
-    monkeypatch.setattr(main, "_get_access_token", lambda c: "tok")
-    monkeypatch.setattr(main, "_post_transcription", lambda *a: (200, "{}"))
-
+    monkeypatch.setattr(main, "_get_access_token", lambda c, creds: "tok")
+    monkeypatch.setattr(main, "_post_json", lambda *a: (200, "{}"))
     event = {"Records": [{"messageId": "m1", "body": eventbridge_body()}]}
     assert main.lambda_handler(event, None) == {"batchItemFailures": []}
 
@@ -400,10 +459,8 @@ def test_handler_success(monkeypatch, ssm, secrets, s3):
 def test_handler_skips_non_json(monkeypatch):
     calls = []
     monkeypatch.setattr(main, "_process_object", lambda *a: calls.append(a))
-
-    body = eventbridge_body(key=f"{LANDING}BDO/2026/07/13/note.txt")
+    body = eventbridge_body(key=f"{LANDING}BDO/year=2026/_SUCCESS")
     event = {"Records": [{"messageId": "m1", "body": body}]}
-
     assert main.lambda_handler(event, None) == {"batchItemFailures": []}
     assert calls == []
 
@@ -413,16 +470,15 @@ def test_handler_reports_partial_failure(monkeypatch):
         raise RuntimeError("API 500")
 
     monkeypatch.setattr(main, "_process_object", boom)
-
     event = {
         "Records": [
             {"messageId": "ok", "body": eventbridge_body(key=f"{LANDING}BDO/x.txt")},
             {"messageId": "bad", "body": eventbridge_body()},
         ]
     }
-    result = main.lambda_handler(event, None)
-
-    assert result == {"batchItemFailures": [{"itemIdentifier": "bad"}]}
+    assert main.lambda_handler(event, None) == {
+        "batchItemFailures": [{"itemIdentifier": "bad"}]
+    }
 
 
 def test_handler_failure_without_message_id_is_not_reported(monkeypatch):
@@ -430,7 +486,6 @@ def test_handler_failure_without_message_id_is_not_reported(monkeypatch):
         raise RuntimeError("API 500")
 
     monkeypatch.setattr(main, "_process_object", boom)
-
     event = {"Records": [{"body": eventbridge_body()}]}
     assert main.lambda_handler(event, None) == {"batchItemFailures": []}
 

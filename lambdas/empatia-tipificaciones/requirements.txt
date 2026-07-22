@@ -1,0 +1,2 @@
+# Runtime dependencies bundled into the Lambda deployment package by build.py.
+cryptography>=42.0.0,<46

@@ -5,7 +5,7 @@ SQS-wrapped events for testing the forwarder in the AWS Lambda console
 
 ```
 s3://augusta-nexa-dev-providers-landing/
-    external/transacciones/empatia/transcripciones/detalle/BDO/year=2026/month=07/day=13/<file>.json
+    external/transacciones/empatia/transcripciones/BDO/year=2026/month=07/day=13/<file>.json
 ```
 
 Each event only carries an S3 **pointer** — the Lambda reads the object from S3
@@ -28,5 +28,5 @@ Notes:
 - If you want a run to actually succeed, first upload a matching object, e.g.:
   ```bash
   aws s3 cp sample_payload.json \
-    "s3://augusta-nexa-dev-providers-landing/external/transacciones/empatia/transcripciones/detalle/BDO/year=2026/month=07/day=13/call-99901110121647.json"
+    "s3://augusta-nexa-dev-providers-landing/external/transacciones/empatia/transcripciones/BDO/year=2026/month=07/day=13/call-99901110121647.json"
   ```

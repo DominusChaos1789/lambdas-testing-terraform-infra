@@ -3,8 +3,12 @@
 A file dropped in the landing bucket (via the provider's S3 replication) triggers
 an EventBridge "Object Created" event that is buffered in SQS and delivered to
 this Lambda. The path segment after the landing prefix identifies the client
-(e.g. ``.../detalle/BDO/year=2026/month=07/day=13/call.json`` -> client "BDO").
+(e.g. ``.../transcripciones/BDO/year=2026/month=07/day=13/call.json`` -> "BDO").
 Objects land in Hive-partitioned folders, but only the client segment matters.
+
+Per file the Lambda POSTs the transcription to the client's plaintext endpoint
+(``endpoint_path``) and, when the client's secret also defines ``cypher_id`` /
+``cypher_code``, an AES-256-encrypted copy to the ``cypher_id`` endpoint.
 
 Configuration is split by sensitivity:
 
@@ -12,12 +16,11 @@ Configuration is split by sensitivity:
   ``token_url``, ``api_base_url``, ``endpoint_path``, ``bucket_prefix`` and the
   name of the secret to use.
 * Secrets Manager (JSON) -- one secret per client (e.g. ``bdo_detalle``),
-  holding ``client_id``, ``client_secret`` and ``grant_type``.
-
-Onboarding a new endpoint is config-only: create the secret, add the parameter.
-No code change or redeploy.
+  holding ``client_id``, ``client_secret``, ``grant_type`` and, for encrypted
+  delivery, ``cypher_id`` and ``cypher_code`` (base64 AES-256 key).
 """
 
+import base64
 import json
 import os
 import time
@@ -26,20 +29,21 @@ import urllib.parse
 import urllib.request
 
 import boto3
+from cryptography.hazmat.primitives import padding as sym_padding
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 # Base SSM path for this API's parameters, e.g.
 # /augusta-nexa-dev/empatia/transcripciones/detalle  (stack_id = augusta-nexa-dev)
 SSM_BASE = os.environ.get(
     "SSM_BASE", "/augusta-nexa-dev/empatia/transcripciones/detalle"
 )
-# Per-client config parameters are siblings named after the client key
-# (e.g. .../detalle/BDO).
+# Per-client config parameters are siblings named after the client key.
 CLIENTS_PREFIX = os.environ.get("CLIENTS_PREFIX", SSM_BASE)
 # Fixed S3 key prefix the providers replicate into; the client key is the next
 # path segment after it (e.g. <prefix>/BDO/year=2026/month=07/day=13/file.json
 # -> "BDO"). Data lands in Hive-partitioned folders under the client segment.
 LANDING_PREFIX = os.environ.get(
-    "LANDING_PREFIX", "external/transacciones/empatia/transcripciones/detalle/"
+    "LANDING_PREFIX", "external/transacciones/empatia/transcripciones/"
 )
 CONFIG_TTL = int(os.environ.get("CONFIG_TTL_SECONDS", "300"))
 # Account that owns the landing bucket. Passed as ExpectedBucketOwner on every
@@ -101,7 +105,24 @@ def _validate_url(url):
     return url
 
 
-def _get_access_token(client_cfg):
+def _encrypt_payload(payload, cypher_code_b64):
+    """Encrypt the JSON payload and return base64(iv + ciphertext).
+
+    Scheme: AES-256-CBC, random 16-byte IV prepended to the ciphertext, PKCS7
+    padding, standard base64. This MUST match the EmpatIA decryptor -- if the
+    API expects AES-GCM, Fernet, or a fixed IV, change only this function.
+    """
+    key = base64.b64decode(cypher_code_b64)
+    iv = os.urandom(16)
+    plaintext = json.dumps(payload).encode("utf-8")
+    padder = sym_padding.PKCS7(algorithms.AES.block_size).padder()
+    padded = padder.update(plaintext) + padder.finalize()
+    encryptor = Cipher(algorithms.AES(key), modes.CBC(iv)).encryptor()
+    ciphertext = encryptor.update(padded) + encryptor.finalize()
+    return base64.b64encode(iv + ciphertext).decode("ascii")
+
+
+def _get_access_token(client_cfg, creds):
     """Client-credentials token for one client, cached per secret until expiry."""
     secret_name = client_cfg["secret_name"]
     now = time.time()
@@ -109,7 +130,6 @@ def _get_access_token(client_cfg):
     if cached and now < cached["expires_at"]:
         return cached["access_token"]
 
-    creds = _get_secret_json(secret_name)
     token_url = _validate_url(client_cfg["token_url"])
     data = urllib.parse.urlencode(
         {
@@ -135,15 +155,11 @@ def _get_access_token(client_cfg):
     return _token_cache[secret_name]["access_token"]
 
 
-def _post_transcription(client_cfg, payload, access_token):
-    url = _validate_url(
-        client_cfg["api_base_url"].rstrip("/")
-        + "/"
-        + client_cfg["endpoint_path"].lstrip("/")
-    )
+def _post_json(api_base_url, endpoint_suffix, body_obj, access_token):
+    url = _validate_url(api_base_url.rstrip("/") + "/" + endpoint_suffix.lstrip("/"))
     req = urllib.request.Request(
         url,
-        data=json.dumps(payload).encode("utf-8"),
+        data=json.dumps(body_obj).encode("utf-8"),
         headers={
             "Content-Type": "application/json",
             "Authorization": f"Bearer {access_token}",
@@ -160,7 +176,7 @@ def _post_transcription(client_cfg, payload, access_token):
 def _client_key_from_object_key(object_key):
     """Client key = first path segment after the fixed landing prefix.
 
-    e.g. "external/.../detalle/BDO/year=2026/month=07/day=13/x.json" -> "BDO".
+    e.g. "external/.../transcripciones/BDO/year=2026/month=07/x.json" -> "BDO".
     """
     key = object_key
     if LANDING_PREFIX and key.startswith(LANDING_PREFIX):
@@ -194,6 +210,13 @@ def _iter_s3_events(sqs_body):
             yield s3_event["bucket"]["name"], key
 
 
+def _forward(api_base_url, suffix, body_obj, token, bucket, key, label):
+    status, body = _post_json(api_base_url, suffix, body_obj, token)
+    if status >= 400:
+        raise RuntimeError(f"API {status} ({label}) for s3://{bucket}/{key}: {body}")
+    print(f"Forwarded ({label}) s3://{bucket}/{key} to '{suffix}' -> {status}")
+
+
 def _process_object(bucket, key):
     client_key = _client_key_from_object_key(key)
     client_cfg = _get_client_config(client_key)
@@ -209,13 +232,22 @@ def _process_object(bucket, key):
             f"'{expected_prefix}' configured for client '{client_key}'"
         )
 
+    creds = _get_secret_json(client_cfg["secret_name"])
     payload = _read_s3_json(bucket, key)
-    token = _get_access_token(client_cfg)
-    status, body = _post_transcription(client_cfg, payload, token)
+    token = _get_access_token(client_cfg, creds)
+    api_base_url = client_cfg["api_base_url"]
 
-    if status >= 400:
-        raise RuntimeError(f"API {status} for s3://{bucket}/{key}: {body}")
-    print(f"Forwarded s3://{bucket}/{key} to '{client_key}' -> {status}")
+    # Plaintext delivery.
+    _forward(
+        api_base_url, client_cfg["endpoint_path"], payload, token, bucket, key, "plain"
+    )
+
+    # Encrypted delivery (only when the client's secret defines both fields).
+    cypher_id = creds.get("cypher_id")
+    cypher_code = creds.get("cypher_code")
+    if cypher_id and cypher_code:
+        encrypted = {"payload": _encrypt_payload(payload, cypher_code)}
+        _forward(api_base_url, cypher_id, encrypted, token, bucket, key, "encrypted")
 
 
 def lambda_handler(event, context):

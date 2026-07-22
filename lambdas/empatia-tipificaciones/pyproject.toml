@@ -3,7 +3,9 @@ name = "empatia-tipificaciones"
 version = "0.1.0"
 description = "Lambda that forwards S3-landed call transcriptions to the EmpatIA API"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "cryptography>=42.0.0",
+]
 
 [dependency-groups]
 dev = [

@@ -11,7 +11,7 @@ variable "landing_bucket" {
 
 variable "landing_prefix" {
   type        = string
-  default     = "external/transacciones/empatia/transcripciones/detalle/"
+  default     = "external/transacciones/empatia/transcripciones/"
   description = "Fixed S3 key prefix providers replicate into; client key is the next segment."
 }
 
@@ -53,7 +53,13 @@ variable "kms_key_arn" {
 
 variable "lambda_source_dir" {
   type        = string
-  description = "Path to the Lambda source directory containing main.py."
+  description = "Path to the Lambda source directory containing main.py and build.py."
+}
+
+variable "build_python" {
+  type        = string
+  default     = "python"
+  description = "Python executable used to run build.py (e.g. python, python3)."
 }
 
 variable "lambda_runtime" {
