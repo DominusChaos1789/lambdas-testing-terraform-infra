@@ -15,8 +15,8 @@ Configuration is split by sensitivity and is environment-relative (STACK_ID):
   client_secret, grant_type and (for encrypted delivery) cypher_code.
 
 Per file the Lambda POSTs the transcription to endpoint_path and, when both
-enpoint_cypher_path and cypher_code are configured, an AES-256-encrypted copy to
-enpoint_cypher_path. Onboarding a new endpoint is config-only.
+enpoint_cypher_path and cypher_code are configured, an AES-256-GCM-encrypted copy
+to enpoint_cypher_path. Onboarding a new endpoint is config-only.
 """
 
 import base64
@@ -28,8 +28,7 @@ import urllib.parse
 import urllib.request
 
 import boto3
-from cryptography.hazmat.primitives import padding as sym_padding
-from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 # Stack identity (e.g. augusta-nexa-dev / -stg / -pro). Drives the SSM parameter
 # and Secrets Manager paths so the same config is portable across environments.
@@ -124,20 +123,18 @@ def _validate_url(url):
 
 
 def _encrypt_payload(payload, cypher_code_b64):
-    """Encrypt the JSON payload and return base64(iv + ciphertext).
+    """Encrypt the JSON payload and return base64(nonce + ciphertext + tag).
 
-    Scheme: AES-256-CBC, random 16-byte IV prepended to the ciphertext, PKCS7
-    padding, standard base64. This MUST match the EmpatIA decryptor -- if the
-    API expects AES-GCM, Fernet, or a fixed IV, change only this function.
+    Scheme: AES-256-GCM (authenticated), random 12-byte nonce prepended to the
+    ciphertext; AESGCM.encrypt appends the 16-byte auth tag. This MUST match the
+    EmpatIA decryptor -- if the API expects a different scheme, change only this
+    function (the decryptor reads nonce=[:12], then AESGCM.decrypt(nonce, rest)).
     """
     key = base64.b64decode(cypher_code_b64)
-    iv = os.urandom(16)
+    nonce = os.urandom(12)
     plaintext = json.dumps(payload).encode("utf-8")
-    padder = sym_padding.PKCS7(algorithms.AES.block_size).padder()
-    padded = padder.update(plaintext) + padder.finalize()
-    encryptor = Cipher(algorithms.AES(key), modes.CBC(iv)).encryptor()
-    ciphertext = encryptor.update(padded) + encryptor.finalize()
-    return base64.b64encode(iv + ciphertext).decode("ascii")
+    ciphertext = AESGCM(key).encrypt(nonce, plaintext, None)
+    return base64.b64encode(nonce + ciphertext).decode("ascii")
 
 
 def _get_access_token(token_url, creds, cache_key):

@@ -5,8 +5,7 @@ import urllib.error
 from io import BytesIO
 
 import pytest
-from cryptography.hazmat.primitives import padding as sym_padding
-from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 import main
 
@@ -102,11 +101,9 @@ def http_error(code, body_bytes):
 
 def aes_decrypt(token_b64, key_b64):
     raw = base64.b64decode(token_b64)
-    iv, ct = raw[:16], raw[16:]
-    dec = Cipher(algorithms.AES(base64.b64decode(key_b64)), modes.CBC(iv)).decryptor()
-    padded = dec.update(ct) + dec.finalize()
-    unpadder = sym_padding.PKCS7(algorithms.AES.block_size).unpadder()
-    return json.loads((unpadder.update(padded) + unpadder.finalize()).decode())
+    nonce, ct = raw[:12], raw[12:]
+    plaintext = AESGCM(base64.b64decode(key_b64)).decrypt(nonce, ct, None)
+    return json.loads(plaintext.decode())
 
 
 @pytest.fixture

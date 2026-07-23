@@ -143,10 +143,10 @@ When the parameter defines `enpoint_cypher_path` **and** the secret defines
 `cypher_code`, the Lambda also POSTs an encrypted copy to
 `api_url/api_path/enpoint_cypher_path` as `{"payload": "<base64>"}`.
 
-> ⚠️ The cipher is **AES-256-CBC** (random 16-byte IV prepended, PKCS7 padding,
-> standard base64) — see `_encrypt_payload` in `main.py`. This must match what
-> the EmpatIA endpoint decrypts with; if it expects AES-GCM / Fernet / a fixed
-> IV, change only that function.
+> ⚠️ The cipher is **AES-256-GCM** — output is `base64(nonce[12] + ciphertext +
+> tag[16])`; see `_encrypt_payload` in `main.py`. The decryptor reads the first
+> 12 bytes as the nonce, then `AESGCM.decrypt(nonce, rest)`. This must match what
+> the EmpatIA endpoint decrypts with; change only that function if it differs.
 
 ---
 
