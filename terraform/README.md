@@ -215,15 +215,17 @@ so a manual change is picked up within ~5 minutes without a redeploy.
 
 ## Testing the deployed Lambda
 
-**Option A — drop a file in S3** (full end-to-end):
+See **[TESTING.md](TESTING.md)** for a layer-by-layer guide (direct invoke,
+SQS → Lambda, EventBridge → SQS, full S3 end-to-end, DLQ/failure path, and log
+reading). Quick end-to-end:
+
 ```bash
-aws s3 cp sample.json \
-  s3://augusta-nexa-dev-providers-landing/external/transacciones/empatia/transcripciones/BDO/2026/07/13/sample.json
+aws s3 cp ../lambdas/empatia-tipificaciones/sample_payload.json \
+  "s3://augusta-nexa-dev-providers-landing/external/transacciones/empatia/transcripciones/BDO/year=2026/month=07/day=13/sample.json"
 ```
 
-**Option B — console test event**: use
-[`../lambdas/empatia-tipificaciones/test_event.json`](../lambdas/empatia-tipificaciones/test_event.json),
-an SQS-wrapped EventBridge "Object Created" event pointing at a `banco_occ/` key.
+Console test events live in
+[`../lambdas/empatia-tipificaciones/test_events/`](../lambdas/empatia-tipificaciones/test_events/).
 
 ---
 
