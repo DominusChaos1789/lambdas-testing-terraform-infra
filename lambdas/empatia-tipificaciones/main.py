@@ -14,7 +14,9 @@ Configuration is split by sensitivity and is environment-relative (STACK_ID):
 * Secrets Manager (JSON) at /<stack>/<secret_name>, holding client_id,
   client_secret, grant_type and (for encrypted delivery) cypher_code.
 
-Per file the Lambda POSTs the transcription to endpoint_path and, when both
+The stored object uses the provider's message structure (a ``messages`` array
+plus flat metadata) and is mapped to the API body by ``_to_api_body`` before
+sending. Per file the Lambda POSTs that body to endpoint_path and, when both
 enpoint_cypher_path and cypher_code are configured, an AES-256-GCM-encrypted copy
 to enpoint_cypher_path. Onboarding a new endpoint is config-only.
 """
@@ -203,6 +205,27 @@ def _read_s3_json(bucket, key):
     return json.loads(obj["Body"].read().decode("utf-8"))
 
 
+def _to_api_body(source):
+    """Map the stored transcription (new provider structure) to the API body.
+
+    The provider now writes the conversation as a ``messages`` array plus flat
+    metadata; the API body keeps the tipificacion identity fields and carries
+    ``messages`` (in place of the old ``transcripcion`` markdown string). Field
+    names differ between the two, so adjust this mapping if the API changes.
+    """
+    return {
+        "idCall": source.get("genesys_cloud_id", ""),
+        "callId": source.get("trace_id", ""),
+        "documento": source.get("client_dni", ""),
+        "primerNombre": source.get("client_name", ""),
+        "primerApellido": source.get("client_last_name", ""),
+        "tipoPersona": source.get("person_type", ""),
+        "tipoDocumento": source.get("client_dni_type", ""),
+        "fechaInicio": source.get("exported_at", ""),
+        "messages": source.get("messages", []),
+    }
+
+
 def _iter_s3_events(sqs_body):
     """Yield (bucket, key) pairs from an SQS message body.
 
@@ -255,7 +278,7 @@ def _process_object(bucket, key):
 
     secret_name = _full_secret_name(client_cfg["secret_name"])
     creds = _get_secret_json(secret_name)
-    payload = _read_s3_json(bucket, key)
+    body = _to_api_body(_read_s3_json(bucket, key))
 
     token_url = _join_url(client_cfg["token_url"], client_cfg["token_path"])
     token = _get_access_token(token_url, creds, secret_name)
@@ -264,7 +287,7 @@ def _process_object(bucket, key):
     # Plaintext delivery.
     _forward(
         _join_url(api_base, client_cfg["endpoint_path"]),
-        payload,
+        body,
         token,
         bucket,
         key,
@@ -275,7 +298,7 @@ def _process_object(bucket, key):
     cypher_path = _cypher_path(client_cfg)
     cypher_code = creds.get("cypher_code")
     if cypher_path and cypher_code:
-        encrypted = {"payload": _encrypt_payload(payload, cypher_code)}
+        encrypted = {"payload": _encrypt_payload(body, cypher_code)}
         _forward(
             _join_url(api_base, cypher_path), encrypted, token, bucket, key, "encrypted"
         )

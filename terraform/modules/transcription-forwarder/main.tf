@@ -5,7 +5,7 @@ locals {
   # Trailing segment of the stack id is the environment (augusta-nexa-dev -> dev).
   environment = reverse(split("-", var.stack_id))[0]
 
-  landing_bucket = coalesce(var.landing_bucket, "${var.stack_id}-providers-landing")
+  landing_bucket = coalesce(var.landing_bucket, "${var.stack_id}-providers-transit")
   landing_prefix = var.landing_prefix
 
   # Per-client parameters and secrets share the suffix "<client>-detalle" under

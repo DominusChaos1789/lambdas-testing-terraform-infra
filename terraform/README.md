@@ -8,7 +8,7 @@ segment `dev` is the environment):
 
 | Thing | Value |
 | --- | --- |
-| Landing bucket | `<stack_id>-providers-landing` → `augusta-nexa-dev-providers-landing` |
+| Landing bucket | `<stack_id>-providers-transit` → `augusta-nexa-dev-providers-transit` |
 | S3 landing prefix | `external/transacciones/empatia/transcripciones/` |
 | SSM param + secret | `/<stack_id>/empatia/api/<client>-detalle` → `/augusta-nexa-dev/empatia/api/bdo-detalle` |
 
@@ -16,7 +16,7 @@ segment `dev` is the environment):
 Accenture account                Our account
 ┌──────────────┐   S3 repl   ┌───────────────────────────┐
 │ source bucket │ ──────────▶ │ augusta-nexa-dev-providers │
-└──────────────┘             │        -landing            │
+└──────────────┘             │        -transit            │
                              └──────────────┬─────────────┘
                               Object Created │  key: external/transacciones/empatia/
                                              │  transcripciones/BDO/year=…/…
@@ -137,6 +137,28 @@ POST 2 : .../tipificaciones/bboc_encrip    <- {"payload": AES-256(payload)}  (on
 
 Tokens are cached **per secret**, so clients never share each other's tokens.
 
+### Payload mapping (S3 object → API body)
+
+The provider stores the conversation in the **new structure** (`messages` array
+plus flat metadata). The Lambda maps it to the API body via `_to_api_body` in
+`main.py` — the endpoint receives the identity fields and the **`messages`**
+array (in place of the old `transcripcion` string):
+
+| S3 object (stored) | → API body |
+| --- | --- |
+| `messages` | `messages` |
+| `client_dni` | `documento` |
+| `client_name` | `primerNombre` |
+| `client_last_name` | `primerApellido` |
+| `person_type` | `tipoPersona` |
+| `client_dni_type` | `tipoDocumento` |
+| `genesys_cloud_id` | `idCall` |
+| `trace_id` | `callId` |
+| `exported_at` | `fechaInicio` |
+
+Both the plaintext and the encrypted POST send this mapped body. Adjust the
+mapping in `_to_api_body` if the API field names change.
+
 ### Encrypted delivery
 
 When the parameter defines `enpoint_cypher_path` **and** the secret defines
@@ -221,7 +243,7 @@ reading). Quick end-to-end:
 
 ```bash
 aws s3 cp ../lambdas/empatia-tipificaciones/sample_payload.json \
-  "s3://augusta-nexa-dev-providers-landing/external/transacciones/empatia/transcripciones/BDO/year=2026/month=07/day=13/sample.json"
+  "s3://augusta-nexa-dev-providers-transit/external/transacciones/empatia/transcripciones/BDO/year=2026/month=07/day=13/sample.json"
 ```
 
 Console test events live in

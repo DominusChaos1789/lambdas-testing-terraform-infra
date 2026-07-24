@@ -41,7 +41,36 @@ SECRET_CFG = {
     "grant_type": "client_credentials",
 }
 SECRET_CFG_ENC = {**SECRET_CFG, "cypher_code": CYPHER_KEY}
-TRANSCRIPTION = {"idCall": "123", "documento": "1063228193"}
+
+# What the provider now stores in S3 (new structure with a `messages` array).
+SOURCE = {
+    "tenant_id": "banco_occidente",
+    "client_name": "NICOLASS",
+    "client_last_name": "HERRERA",
+    "client_dni": "1063228193",
+    "client_dni_type": "CC",
+    "person_type": "Natural",
+    "genesys_cloud_id": "3fd93dd5-1a36-47aa-a72b-e2a713691f7a",
+    "trace_id": "b94230fb82d7c03cd6beae12b3288abd",
+    "exported_at": "2026-07-23T11:08:09-05:00",
+    "turns": 2,
+    "messages": [
+        {"role": "assistant", "content": "Hola, soy el agente virtual."},
+        {"role": "user", "content": "Buenos dias, olvide mi clave."},
+    ],
+}
+# What _to_api_body should produce for the endpoint.
+API_BODY = {
+    "idCall": "3fd93dd5-1a36-47aa-a72b-e2a713691f7a",
+    "callId": "b94230fb82d7c03cd6beae12b3288abd",
+    "documento": "1063228193",
+    "primerNombre": "NICOLASS",
+    "primerApellido": "HERRERA",
+    "tipoPersona": "Natural",
+    "tipoDocumento": "CC",
+    "fechaInicio": "2026-07-23T11:08:09-05:00",
+    "messages": SOURCE["messages"],
+}
 
 
 class FakeSSM:
@@ -122,7 +151,7 @@ def secrets(monkeypatch):
 
 @pytest.fixture
 def s3(monkeypatch):
-    fake = FakeS3({("bucket", FULL_KEY): json.dumps(TRANSCRIPTION).encode()})
+    fake = FakeS3({("bucket", FULL_KEY): json.dumps(SOURCE).encode()})
     monkeypatch.setattr(main, "_s3", fake)
     return fake
 
@@ -190,18 +219,33 @@ def test_get_secret_json_refetches_after_ttl(secrets, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# _to_api_body
+# ---------------------------------------------------------------------------
+
+
+def test_to_api_body_maps_new_structure():
+    assert main._to_api_body(SOURCE) == API_BODY
+
+
+def test_to_api_body_defaults_missing_fields():
+    body = main._to_api_body({"messages": [{"role": "user", "content": "hi"}]})
+    assert body["messages"] == [{"role": "user", "content": "hi"}]
+    assert body["documento"] == ""  # missing source fields default to ""
+
+
+# ---------------------------------------------------------------------------
 # _encrypt_payload
 # ---------------------------------------------------------------------------
 
 
 def test_encrypt_payload_roundtrips():
-    token = main._encrypt_payload(TRANSCRIPTION, CYPHER_KEY)
-    assert aes_decrypt(token, CYPHER_KEY) == TRANSCRIPTION
+    token = main._encrypt_payload(API_BODY, CYPHER_KEY)
+    assert aes_decrypt(token, CYPHER_KEY) == API_BODY
 
 
 def test_encrypt_payload_uses_random_iv():
-    a = main._encrypt_payload(TRANSCRIPTION, CYPHER_KEY)
-    b = main._encrypt_payload(TRANSCRIPTION, CYPHER_KEY)
+    a = main._encrypt_payload(API_BODY, CYPHER_KEY)
+    b = main._encrypt_payload(API_BODY, CYPHER_KEY)
     assert a != b
     assert aes_decrypt(a, CYPHER_KEY) == aes_decrypt(b, CYPHER_KEY)
 
@@ -364,7 +408,7 @@ def test_cypher_path_tolerates_correct_spelling():
 
 
 def test_read_s3_json(s3):
-    assert main._read_s3_json("bucket", FULL_KEY) == TRANSCRIPTION
+    assert main._read_s3_json("bucket", FULL_KEY) == SOURCE
 
 
 def test_read_s3_json_passes_expected_bucket_owner(s3):
@@ -423,11 +467,15 @@ def test_process_object_rejects_key_outside_bucket_prefix(ssm, s3):
 def test_process_object_plain_only_when_no_cypher(monkeypatch, ssm, secrets, s3):
     monkeypatch.setattr(main, "_get_access_token", lambda url, creds, key: "tok")
     posted = []
-    monkeypatch.setattr(
-        main, "_post_json", lambda url, body, tok: posted.append(url) or (200, "{}")
-    )
+
+    def fake_post(url, body, tok):
+        posted.append((url, body))
+        return 200, "{}"
+
+    monkeypatch.setattr(main, "_post_json", fake_post)
     main._process_object("bucket", FULL_KEY)
-    assert posted == [FULL_PLAIN_URL]
+    # posts the transformed body (with messages) to the plain endpoint only
+    assert posted == [(FULL_PLAIN_URL, API_BODY)]
 
 
 def test_process_object_plain_and_encrypted(monkeypatch, ssm, secrets, s3):
@@ -443,9 +491,9 @@ def test_process_object_plain_and_encrypted(monkeypatch, ssm, secrets, s3):
     main._process_object("bucket", FULL_KEY)
 
     assert [p[0] for p in posted] == [FULL_PLAIN_URL, FULL_CYPHER_URL]
-    assert posted[0][1] == TRANSCRIPTION
+    assert posted[0][1] == API_BODY
     assert set(posted[1][1]) == {"payload"}
-    assert aes_decrypt(posted[1][1]["payload"], CYPHER_KEY) == TRANSCRIPTION
+    assert aes_decrypt(posted[1][1]["payload"], CYPHER_KEY) == API_BODY
 
 
 def test_process_object_allows_missing_bucket_prefix(monkeypatch, secrets, s3):

@@ -6,7 +6,7 @@ variable "stack_id" {
 variable "landing_bucket" {
   type        = string
   default     = null
-  description = "Landing bucket. Defaults to \"<stack_id>-providers-landing\" when null."
+  description = "Landing bucket. Defaults to \"<stack_id>-providers-transit\" when null."
 }
 
 variable "landing_prefix" {

@@ -4,13 +4,16 @@ SQS-wrapped events for testing the forwarder in the AWS Lambda console
 (Test tab → paste the file contents). Keys use the current layout:
 
 ```
-s3://augusta-nexa-dev-providers-landing/
+s3://augusta-nexa-dev-providers-transit/
     external/transacciones/empatia/transcripciones/BDO/year=2026/month=07/day=13/<file>.json
 ```
 
-Each event only carries an S3 **pointer** — the Lambda reads the object from S3
-and POSTs its contents. So the referenced object must exist in the bucket (and
-the `BDO` SSM param + secret must be configured) for a successful run.
+Each event only carries an S3 **pointer** — the Lambda reads the object from S3,
+maps it to the API body (the stored object uses the provider's `messages`
+structure; see `_to_api_body`), and POSTs it. So the referenced object must exist
+in the bucket (and the `BDO` SSM param + secret must be configured) for a
+successful run. Upload [`../sample_payload.json`](../sample_payload.json) (new
+structure) as the object.
 
 | File | Scenario | Expected result |
 | --- | --- | --- |
@@ -28,5 +31,5 @@ Notes:
 - If you want a run to actually succeed, first upload a matching object, e.g.:
   ```bash
   aws s3 cp sample_payload.json \
-    "s3://augusta-nexa-dev-providers-landing/external/transacciones/empatia/transcripciones/BDO/year=2026/month=07/day=13/call-99901110121647.json"
+    "s3://augusta-nexa-dev-providers-transit/external/transacciones/empatia/transcripciones/BDO/year=2026/month=07/day=13/call-99901110121647.json"
   ```

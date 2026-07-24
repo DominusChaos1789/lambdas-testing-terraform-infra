@@ -8,7 +8,7 @@ Resource names (dev), derived from `stack_id = augusta-nexa-dev`:
 
 | Piece | Name |
 | --- | --- |
-| Landing bucket | `augusta-nexa-dev-providers-landing` |
+| Landing bucket | `augusta-nexa-dev-providers-transit` |
 | Landing prefix | `external/transacciones/empatia/transcripciones/` |
 | EventBridge rule | `augusta-nexa-dev-empatia-detalle-transcription-object-created` |
 | SQS queue | `augusta-nexa-dev-empatia-detalle-transcriptions` |
@@ -28,7 +28,7 @@ Set once for the copy/paste commands below:
 
 ```bash
 export AWS_REGION=us-east-2
-export BUCKET=augusta-nexa-dev-providers-landing
+export BUCKET=augusta-nexa-dev-providers-transit
 export PREFIX=external/transacciones/empatia/transcripciones
 export QUEUE=augusta-nexa-dev-empatia-detalle-transcriptions
 export DLQ=augusta-nexa-dev-empatia-detalle-transcriptions-dlq
@@ -228,9 +228,85 @@ aws logs start-query --log-group-name "$LOG_GROUP" \
 | Everything "works" but no API record | API | 2xx in logs? check EmpatIA side for the `idCall` |
 | Encrypted POST rejected, plain OK | crypto | API's GCM framing must match `nonce+ct+tag` |
 
+---
+
+## Validators (per hop)
+
+A checklist to confirm each hop actually did its job — run after the tests above.
+`✅` is the expected result.
+
+### S3 object shape (the payload the Lambda reads)
+
+The provider stores the **new structure** (a `messages` array + flat metadata).
+The Lambda maps it to the API body (`_to_api_body`) — the endpoint receives
+identity fields plus the `messages` array. Validate a stored object:
+
+```bash
+aws s3 cp "s3://$BUCKET/$PREFIX/BDO/year=2026/month=07/day=13/call-99901110121647.json" - \
+  | jq '{tenant_id, client_dni, turns, messages: (.messages | length)}'
+```
+✅ has a non-empty `messages` array (that is what gets forwarded).
+
+### EventBridge rule matched
+
+```bash
+# metric for the rule over the last 15 min (needs the rule to have fired)
+aws cloudwatch get-metric-statistics --namespace AWS/Events \
+  --metric-name MatchedEvents --period 900 --statistics Sum \
+  --dimensions Name=RuleName,Value=augusta-nexa-dev-empatia-detalle-transcription-object-created \
+  --start-time "$(date -u -d '15 min ago' +%FT%TZ)" --end-time "$(date -u +%FT%TZ)"
+```
+✅ `Sum >= 1`. If `FailedInvocations > 0`, the rule matched but couldn't deliver
+to SQS (check the queue policy).
+
+### SQS delivered and drained
+
+```bash
+QUEUE_URL=$(aws sqs get-queue-url --queue-name "$QUEUE" --query QueueUrl --output text)
+aws sqs get-queue-attributes --queue-url "$QUEUE_URL" \
+  --attribute-names ApproximateNumberOfMessages ApproximateNumberOfMessagesNotVisible
+```
+✅ both counts return to `0` shortly after a run (the message was consumed). A
+climbing `NotVisible` that never clears = the Lambda keeps erroring.
+
+### Lambda invoked, succeeded, and posted the mapped body
+
+```bash
+# invocations vs errors over 15 min
+aws cloudwatch get-metric-statistics --namespace AWS/Lambda --metric-name Errors \
+  --period 900 --statistics Sum --dimensions Name=FunctionName,Value=$FUNCTION \
+  --start-time "$(date -u -d '15 min ago' +%FT%TZ)" --end-time "$(date -u +%FT%TZ)"
+
+# confirm the forward happened
+aws logs filter-log-events --log-group-name "$LOG_GROUP" --start-time "$(( ($(date +%s) - 900) * 1000 ))" \
+  --filter-pattern '"Forwarded (plain)"' --query 'events[].message'
+```
+✅ `Errors Sum == 0` and at least one `Forwarded (plain) ... -> 200` line. The
+`messages` array reached the API if the POST returned 2xx.
+
+### DLQ empty (no permanent failures)
+
+```bash
+DLQ_URL=$(aws sqs get-queue-url --queue-name "$DLQ" --query QueueUrl --output text)
+aws sqs get-queue-attributes --queue-url "$DLQ_URL" \
+  --attribute-names ApproximateNumberOfMessages
+```
+✅ `0`. Anything > 0 is a message that failed 5× — inspect it (section 5).
+
+### Local: the transform maps correctly (no AWS)
+
+```bash
+cd ../lambdas/empatia-tipificaciones
+STACK_ID=augusta-nexa-dev AWS_ACCOUNT_ID=1 AWS_DEFAULT_REGION=us-east-2 \
+  uv run python -c "import json,main; print(json.dumps(main._to_api_body(json.load(open('sample_payload.json'))), indent=2))"
+```
+✅ prints the API body with `messages`, `documento`, `primerNombre`, etc.
+
+---
+
 ## Unit tests (no AWS needed)
 
 ```bash
 cd ../lambdas/empatia-tipificaciones
-uv run pytest          # 45 tests, mocks all AWS + HTTP; 100% coverage
+uv run pytest          # 47 tests, mocks all AWS + HTTP; 100% coverage
 ```
