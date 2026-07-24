@@ -24,7 +24,17 @@ S3 (Object Created) ─▶ EventBridge rule ─▶ SQS queue ─▶ Lambda ─�
                                               └─(after 5 tries)─▶ DLQ
 ```
 
-Set once for the copy/paste commands below:
+Everything below is **AWS CLI v2** (plus `jq` for filtering). Which shell:
+
+- **AWS CloudShell (recommended)** — `aws`, `jq`, `bash`, and GNU `date` are all
+  preinstalled and you're already authenticated. Paste the `bash` blocks as-is.
+- **bash** (Linux / WSL / Git Bash) — same, but on **macOS** replace
+  `date -u -d '15 min ago'` with `date -u -v-15M`.
+- **PowerShell** — use the setup + time helpers in the
+  [Appendix: PowerShell](#appendix-powershell) below (variable syntax and the
+  `date` expressions differ). The plain `aws …` calls are otherwise identical.
+
+Set once for the copy/paste commands below (bash / CloudShell):
 
 ```bash
 export AWS_REGION=us-east-2
@@ -35,6 +45,10 @@ export DLQ=augusta-nexa-dev-empatia-detalle-transcriptions-dlq
 export FUNCTION=augusta-nexa-dev-empatia-detalle-transcription-forwarder
 export LOG_GROUP=/aws/lambda/$FUNCTION   # log group
 ```
+
+> PowerShell users: run the [Appendix](#appendix-powershell) setup block instead,
+> then everywhere below swap `$BUCKET` → `$env:BUCKET` etc. (or use the `$BUCKET`
+> PowerShell vars from the appendix).
 
 ---
 
@@ -309,4 +323,121 @@ STACK_ID=augusta-nexa-dev AWS_ACCOUNT_ID=1 AWS_DEFAULT_REGION=us-east-2 \
 ```bash
 cd ../lambdas/empatia-tipificaciones
 uv run pytest          # 47 tests, mocks all AWS + HTTP; 100% coverage
+```
+
+---
+
+## Appendix: PowerShell
+
+Windows PowerShell equivalents for the shell-specific parts (variables, `date`
+expressions, and inline JSON). The plain `aws …` calls not shown here are
+identical to the bash blocks. Tested against Windows PowerShell 5.1.
+
+### Setup (variables)
+
+```powershell
+$Region   = "us-east-2"
+$Bucket   = "augusta-nexa-dev-providers-transit"
+$Prefix   = "external/transacciones/empatia/transcripciones"
+$Queue    = "augusta-nexa-dev-empatia-detalle-transcriptions"
+$Dlq      = "augusta-nexa-dev-empatia-detalle-transcriptions-dlq"
+$Function = "augusta-nexa-dev-empatia-detalle-transcription-forwarder"
+$LogGroup = "/aws/lambda/$Function"
+$env:AWS_DEFAULT_REGION = $Region   # so you can omit --region
+```
+
+### Time helpers (replace the bash `date` expressions)
+
+```powershell
+$now      = (Get-Date).ToUniversalTime()
+$StartIso = $now.AddMinutes(-15).ToString("yyyy-MM-ddTHH:mm:ssZ")   # --start-time
+$EndIso   = $now.ToString("yyyy-MM-ddTHH:mm:ssZ")                   # --end-time
+$StartMs  = [DateTimeOffset]::UtcNow.AddMinutes(-15).ToUnixTimeMilliseconds()  # logs filter --start-time
+```
+
+### 1 — upload + direct invoke
+
+```powershell
+aws s3 cp ../lambdas/empatia-tipificaciones/sample_payload.json `
+  "s3://$Bucket/$Prefix/BDO/year=2026/month=07/day=13/call-99901110121647.json"
+
+aws lambda invoke --function-name $Function `
+  --payload fileb://../lambdas/empatia-tipificaciones/test_event.json `
+  --cli-binary-format raw-in-base64-out out.json
+Get-Content out.json        # expect {"batchItemFailures": []}
+```
+
+### 2 — SQS send-message (build the body with a file, no quoting headaches)
+
+```powershell
+$QueueUrl = aws sqs get-queue-url --queue-name $Queue --query QueueUrl --output text
+$key = "$Prefix/BDO/year=2026/month=07/day=13/call-99901110121647.json"
+@{
+  "detail-type" = "Object Created"; source = "aws.s3"
+  detail = @{ bucket = @{ name = $Bucket }; object = @{ key = $key } }
+} | ConvertTo-Json -Depth 6 | Set-Content -Encoding ascii msg.json
+aws sqs send-message --queue-url $QueueUrl --message-body file://msg.json
+```
+
+### 3 — EventBridge put-events
+
+```powershell
+$key = "$Prefix/BDO/year=2026/month=07/day=13/call-eb-test.json"
+# Detail must be a JSON *string* inside the entry:
+$detail = @{ bucket = @{ name = $Bucket }; object = @{ key = $key } } | ConvertTo-Json -Compress
+$entry  = @{ Source = "aws.s3"; DetailType = "Object Created"; Detail = $detail; EventBusName = "default" }
+# force a one-element JSON array (PS 5.1 has no -AsArray):
+"[" + ($entry | ConvertTo-Json -Depth 6 -Compress) + "]" | Set-Content -Encoding ascii entries.json
+aws events put-events --entries file://entries.json
+```
+
+### 6 — logs + queries
+
+```powershell
+aws logs tail $LogGroup --follow --since 10m
+
+$startEpoch = [DateTimeOffset]::UtcNow.AddHours(-1).ToUnixTimeSeconds()
+$endEpoch   = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+aws logs start-query --log-group-name $LogGroup `
+  --start-time $startEpoch --end-time $endEpoch `
+  --query-string 'fields @timestamp,@message | filter @message like /Forwarded|Failed message|Ignoring/ | sort @timestamp desc'
+```
+
+### Validators (metrics + logs use the time helpers above)
+
+```powershell
+# EventBridge matched
+aws cloudwatch get-metric-statistics --namespace AWS/Events --metric-name MatchedEvents `
+  --period 900 --statistics Sum `
+  --dimensions Name=RuleName,Value=augusta-nexa-dev-empatia-detalle-transcription-object-created `
+  --start-time $StartIso --end-time $EndIso
+
+# Lambda errors
+aws cloudwatch get-metric-statistics --namespace AWS/Lambda --metric-name Errors `
+  --period 900 --statistics Sum --dimensions Name=FunctionName,Value=$Function `
+  --start-time $StartIso --end-time $EndIso
+
+# forward log line
+aws logs filter-log-events --log-group-name $LogGroup --start-time $StartMs `
+  --filter-pattern '"Forwarded (plain)"' --query 'events[].message'
+```
+
+### jq alternative on Windows
+
+CloudShell has `jq`. On Windows either `winget install jqlang.jq`, or use
+`ConvertFrom-Json` instead of `| jq …`:
+
+```powershell
+# equivalent of: aws s3 cp ... - | jq '.messages | length'
+(aws s3 cp "s3://$Bucket/$Prefix/BDO/year=2026/month=07/day=13/call-99901110121647.json" - `
+  | ConvertFrom-Json).messages.Count
+```
+
+### Local validators (transform + pytest)
+
+```powershell
+cd ../lambdas/empatia-tipificaciones
+$env:STACK_ID = "augusta-nexa-dev"; $env:AWS_ACCOUNT_ID = "1"; $env:AWS_DEFAULT_REGION = "us-east-2"
+uv run python -c "import json,main; print(json.dumps(main._to_api_body(json.load(open('sample_payload.json'))), indent=2))"
+uv run pytest
 ```
