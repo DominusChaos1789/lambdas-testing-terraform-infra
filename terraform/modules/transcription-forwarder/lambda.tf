@@ -17,21 +17,21 @@ resource "null_resource" "build" {
 data "archive_file" "lambda" {
   type        = "zip"
   source_dir  = "${var.lambda_source_dir}/build"
-  output_path = "${path.module}/.build/${local.name}-forwarder.zip"
+  output_path = "${path.module}/.build/${local.function_name}.zip"
   depends_on  = [null_resource.build]
 }
 
 resource "aws_cloudwatch_log_group" "lambda" {
-  name              = "/aws/lambda/${local.name}-transcription-forwarder"
+  name              = "/aws/lambda/${local.function_name}"
   retention_in_days = var.log_retention_days
   tags              = local.common_tags
 }
 
 resource "aws_lambda_function" "forwarder" {
-  function_name    = "${local.name}-transcription-forwarder"
+  function_name    = local.function_name
   role             = aws_iam_role.lambda.arn
   runtime          = var.lambda_runtime
-  handler          = "main.lambda_handler"
+  handler          = "main.handler"
   filename         = data.archive_file.lambda.output_path
   source_code_hash = data.archive_file.lambda.output_base64sha256
   timeout          = var.lambda_timeout

@@ -1,5 +1,5 @@
 aws_region = "us-east-2"
-stack_id   = "augusta-nexa-dev" # -> landing bucket augusta-nexa-dev-providers-transit
+stack_id   = "augusta-nexa-dev" # -> landing bucket augusta-nexa-dev-providers-landing
 
 # CMK that encrypts the client secrets (the "augusta-nexa-dev" key).
 # kms_key_arn = "arn:aws:kms:us-east-2:575108921774:key/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"

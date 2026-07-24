@@ -8,13 +8,13 @@ Resource names (dev), derived from `stack_id = augusta-nexa-dev`:
 
 | Piece | Name |
 | --- | --- |
-| Landing bucket | `augusta-nexa-dev-providers-transit` |
+| Landing bucket | `augusta-nexa-dev-providers-landing` |
 | Landing prefix | `external/transacciones/empatia/transcripciones/` |
 | EventBridge rule | `augusta-nexa-dev-empatia-detalle-transcription-object-created` |
 | SQS queue | `augusta-nexa-dev-empatia-detalle-transcriptions` |
 | DLQ | `augusta-nexa-dev-empatia-detalle-transcriptions-dlq` |
-| Lambda | `augusta-nexa-dev-empatia-detalle-transcription-forwarder` |
-| Log group | `/aws/lambda/augusta-nexa-dev-empatia-detalle-transcription-forwarder` |
+| Lambda | `augusta-nexa-dev-empatia-publish-azure` |
+| Log group | `/aws/lambda/augusta-nexa-dev-empatia-publish-azure` |
 | SSM param (BDO) | `/augusta-nexa-dev/empatia/api/bdo-detalle` |
 | Secret (BDO) | `/augusta-nexa-dev/empatia/api/bdo-detalle` |
 
@@ -38,11 +38,11 @@ Set once for the copy/paste commands below (bash / CloudShell):
 
 ```bash
 export AWS_REGION=us-east-2
-export BUCKET=augusta-nexa-dev-providers-transit
+export BUCKET=augusta-nexa-dev-providers-landing
 export PREFIX=external/transacciones/empatia/transcripciones
 export QUEUE=augusta-nexa-dev-empatia-detalle-transcriptions
 export DLQ=augusta-nexa-dev-empatia-detalle-transcriptions-dlq
-export FUNCTION=augusta-nexa-dev-empatia-detalle-transcription-forwarder
+export FUNCTION=augusta-nexa-dev-empatia-publish-azure
 export LOG_GROUP=/aws/lambda/$FUNCTION   # log group
 ```
 
@@ -337,11 +337,11 @@ identical to the bash blocks. Tested against Windows PowerShell 5.1.
 
 ```powershell
 $Region   = "us-east-2"
-$Bucket   = "augusta-nexa-dev-providers-transit"
+$Bucket   = "augusta-nexa-dev-providers-landing"
 $Prefix   = "external/transacciones/empatia/transcripciones"
 $Queue    = "augusta-nexa-dev-empatia-detalle-transcriptions"
 $Dlq      = "augusta-nexa-dev-empatia-detalle-transcriptions-dlq"
-$Function = "augusta-nexa-dev-empatia-detalle-transcription-forwarder"
+$Function = "augusta-nexa-dev-empatia-publish-azure"
 $LogGroup = "/aws/lambda/$Function"
 $env:AWS_DEFAULT_REGION = $Region   # so you can omit --region
 ```

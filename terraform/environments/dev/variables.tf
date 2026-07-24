@@ -6,7 +6,7 @@ variable "aws_region" {
 variable "stack_id" {
   type        = string
   default     = "augusta-nexa-dev"
-  description = "Stack id; landing bucket becomes <stack_id>-providers-transit."
+  description = "Stack id; landing bucket becomes <stack_id>-providers-landing."
 }
 
 variable "kms_key_arn" {

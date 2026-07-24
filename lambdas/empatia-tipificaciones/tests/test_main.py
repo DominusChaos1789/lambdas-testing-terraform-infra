@@ -524,7 +524,7 @@ def test_process_object_raises_on_encrypted_api_error(monkeypatch, ssm, secrets,
 
 
 # ---------------------------------------------------------------------------
-# lambda_handler
+# handler
 # ---------------------------------------------------------------------------
 
 
@@ -532,7 +532,7 @@ def test_handler_success(monkeypatch, ssm, secrets, s3):
     monkeypatch.setattr(main, "_get_access_token", lambda url, creds, key: "tok")
     monkeypatch.setattr(main, "_post_json", lambda *a: (200, "{}"))
     event = {"Records": [{"messageId": "m1", "body": eventbridge_body()}]}
-    assert main.lambda_handler(event, None) == {"batchItemFailures": []}
+    assert main.handler(event, None) == {"batchItemFailures": []}
 
 
 def test_handler_skips_non_json(monkeypatch):
@@ -540,7 +540,7 @@ def test_handler_skips_non_json(monkeypatch):
     monkeypatch.setattr(main, "_process_object", lambda *a: calls.append(a))
     body = eventbridge_body(key=f"{LANDING}BDO/year=2026/_SUCCESS")
     event = {"Records": [{"messageId": "m1", "body": body}]}
-    assert main.lambda_handler(event, None) == {"batchItemFailures": []}
+    assert main.handler(event, None) == {"batchItemFailures": []}
     assert calls == []
 
 
@@ -555,7 +555,7 @@ def test_handler_reports_partial_failure(monkeypatch):
             {"messageId": "bad", "body": eventbridge_body()},
         ]
     }
-    assert main.lambda_handler(event, None) == {
+    assert main.handler(event, None) == {
         "batchItemFailures": [{"itemIdentifier": "bad"}]
     }
 
@@ -566,13 +566,8 @@ def test_handler_failure_without_message_id_is_not_reported(monkeypatch):
 
     monkeypatch.setattr(main, "_process_object", boom)
     event = {"Records": [{"body": eventbridge_body()}]}
-    assert main.lambda_handler(event, None) == {"batchItemFailures": []}
+    assert main.handler(event, None) == {"batchItemFailures": []}
 
 
 def test_handler_empty_event():
-    assert main.lambda_handler({}, None) == {"batchItemFailures": []}
-
-
-def test_handler_alias_points_to_lambda_handler():
-    # Lambda works whether Handler is "main.lambda_handler" or "main.handler".
-    assert main.handler is main.lambda_handler
+    assert main.handler({}, None) == {"batchItemFailures": []}

@@ -4,7 +4,7 @@ SQS-wrapped events for testing the forwarder in the AWS Lambda console
 (Test tab → paste the file contents). Keys use the current layout:
 
 ```
-s3://augusta-nexa-dev-providers-transit/
+s3://augusta-nexa-dev-providers-landing/
     external/transacciones/empatia/transcripciones/BDO/year=2026/month=07/day=13/<file>.json
 ```
 
@@ -31,5 +31,5 @@ Notes:
 - If you want a run to actually succeed, first upload a matching object, e.g.:
   ```bash
   aws s3 cp sample_payload.json \
-    "s3://augusta-nexa-dev-providers-transit/external/transacciones/empatia/transcripciones/BDO/year=2026/month=07/day=13/call-99901110121647.json"
+    "s3://augusta-nexa-dev-providers-landing/external/transacciones/empatia/transcripciones/BDO/year=2026/month=07/day=13/call-99901110121647.json"
   ```

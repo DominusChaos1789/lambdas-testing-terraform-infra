@@ -8,7 +8,7 @@ segment `dev` is the environment):
 
 | Thing | Value |
 | --- | --- |
-| Landing bucket | `<stack_id>-providers-transit` → `augusta-nexa-dev-providers-transit` |
+| Landing bucket | `<stack_id>-providers-landing` → `augusta-nexa-dev-providers-landing` |
 | S3 landing prefix | `external/transacciones/empatia/transcripciones/` |
 | SSM param + secret | `/<stack_id>/empatia/api/<client>-detalle` → `/augusta-nexa-dev/empatia/api/bdo-detalle` |
 
@@ -16,7 +16,7 @@ segment `dev` is the environment):
 Accenture account                Our account
 ┌──────────────┐   S3 repl   ┌───────────────────────────┐
 │ source bucket │ ──────────▶ │ augusta-nexa-dev-providers │
-└──────────────┘             │        -transit            │
+└──────────────┘             │        -landing            │
                              └──────────────┬─────────────┘
                               Object Created │  key: external/transacciones/empatia/
                                              │  transcripciones/BDO/year=…/…
@@ -243,7 +243,7 @@ reading). Quick end-to-end:
 
 ```bash
 aws s3 cp ../lambdas/empatia-tipificaciones/sample_payload.json \
-  "s3://augusta-nexa-dev-providers-transit/external/transacciones/empatia/transcripciones/BDO/year=2026/month=07/day=13/sample.json"
+  "s3://augusta-nexa-dev-providers-landing/external/transacciones/empatia/transcripciones/BDO/year=2026/month=07/day=13/sample.json"
 ```
 
 Console test events live in
