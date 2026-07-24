@@ -52,6 +52,52 @@ export LOG_GROUP=/aws/lambda/$FUNCTION   # log group
 
 ---
 
+## Deploying the code (manual, without Terraform)
+
+If you deploy the function by hand (not via `terraform apply`), the zip **must
+have `main.py` at its root** and include the `cryptography` dependency, or the
+runtime fails with `ImportModuleError: No module named 'main'` (nested `main.py`)
+or `No module named 'cryptography'` (missing dep). `build.py` produces exactly
+this — `function.zip` with `main.py` at the root plus the Linux wheels:
+
+```bash
+cd ../lambdas/empatia-tipificaciones
+python build.py                       # -> function.zip (main.py at root + deps)
+
+aws lambda update-function-code --function-name "$FUNCTION" \
+  --zip-file fileb://function.zip --region "$AWS_REGION"
+
+aws lambda update-function-configuration --function-name "$FUNCTION" \
+  --handler main.handler --runtime python3.12 --timeout 30 \
+  --region "$AWS_REGION"
+```
+
+PowerShell:
+
+```powershell
+cd ../lambdas/empatia-tipificaciones
+python build.py
+aws lambda update-function-code --function-name $Function `
+  --zip-file fileb://function.zip --region $Region
+aws lambda update-function-configuration --function-name $Function `
+  --handler main.handler --runtime python3.12 --timeout 30 --region $Region
+```
+
+> ✅ Sanity-check the zip before uploading: `main.py` must be listed at the top
+> level (not under a folder):
+> ```bash
+> unzip -l function.zip | grep -E ' main\.py$| cryptography/'
+> ```
+
+Set the env vars the handler needs (Terraform does this automatically):
+
+```bash
+aws lambda update-function-configuration --function-name "$FUNCTION" --region "$AWS_REGION" \
+  --environment "Variables={STACK_ID=augusta-nexa-dev,PARAM_PREFIX=/augusta-nexa-dev/empatia/api,LANDING_PREFIX=external/transacciones/empatia/transcripciones/,AWS_ACCOUNT_ID=575108921774}"
+```
+
+---
+
 ## 0. Preconditions (must exist before any run succeeds)
 
 - [ ] **SSM parameter** `/augusta-nexa-dev/empatia/api/bdo-detalle` exists and is valid JSON.
