@@ -321,3 +321,8 @@ def lambda_handler(event, context):
                 failures.append({"itemIdentifier": message_id})
 
     return {"batchItemFailures": failures}
+
+
+# Alias so the Lambda works whether its Handler is configured as
+# "main.lambda_handler" or "main.handler".
+handler = lambda_handler

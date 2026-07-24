@@ -571,3 +571,8 @@ def test_handler_failure_without_message_id_is_not_reported(monkeypatch):
 
 def test_handler_empty_event():
     assert main.lambda_handler({}, None) == {"batchItemFailures": []}
+
+
+def test_handler_alias_points_to_lambda_handler():
+    # Lambda works whether Handler is "main.lambda_handler" or "main.handler".
+    assert main.handler is main.lambda_handler
