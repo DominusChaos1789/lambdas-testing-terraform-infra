@@ -28,10 +28,13 @@ resource "aws_cloudwatch_log_group" "lambda" {
 }
 
 resource "aws_lambda_function" "forwarder" {
-  function_name    = local.function_name
-  role             = aws_iam_role.lambda.arn
-  runtime          = var.lambda_runtime
-  handler          = "main.handler"
+  function_name = local.function_name
+  role          = aws_iam_role.lambda.arn
+  runtime       = var.lambda_runtime
+  handler       = "main.handler"
+  # Must match the wheels build.py fetches (manylinux2014_x86_64). Switching to
+  # arm64 requires rebuilding deps for aarch64 -- change both together.
+  architectures    = ["x86_64"]
   filename         = data.archive_file.lambda.output_path
   source_code_hash = data.archive_file.lambda.output_base64sha256
   timeout          = var.lambda_timeout
