@@ -1,0 +1,3 @@
+# Dependency provided to the Lambda via a LAYER (built by build_layer.py),
+# so the function code stays a single main.py.
+cryptography>=42.0.0,<46
