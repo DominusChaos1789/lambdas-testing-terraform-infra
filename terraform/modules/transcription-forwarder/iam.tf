@@ -66,15 +66,20 @@ data "aws_iam_policy_document" "lambda" {
     resources = [for s in data.aws_secretsmanager_secret.client : s.arn]
   }
 
+  # Decrypt the Secrets Manager secret and, if the routing parameter is a
+  # SecureString, the SSM parameter too (WithDecryption=True in the Lambda).
   statement {
-    sid       = "DecryptClientSecrets"
+    sid       = "DecryptConfigAndSecrets"
     effect    = "Allow"
     actions   = ["kms:Decrypt"]
     resources = [coalesce(var.kms_key_arn, "*")]
     condition {
       test     = "StringEquals"
       variable = "kms:ViaService"
-      values   = ["secretsmanager.${local.region}.amazonaws.com"]
+      values = [
+        "secretsmanager.${local.region}.amazonaws.com",
+        "ssm.${local.region}.amazonaws.com",
+      ]
     }
   }
 }

@@ -66,7 +66,10 @@ def _get_json_param(name):
     if cached and now < cached[1]:
         return cached[0]
 
-    resp = _ssm.get_parameter(Name=name)
+    # WithDecryption=True is ignored for plain String parameters and decrypts
+    # SecureString ones, so the routing config works either way (needs kms:Decrypt
+    # via ssm in the role for SecureString).
+    resp = _ssm.get_parameter(Name=name, WithDecryption=True)
     raw = resp["Parameter"]["Value"]
     try:
         value = json.loads(raw)

@@ -77,9 +77,11 @@ class FakeSSM:
     def __init__(self, params):
         self.params = params
         self.calls = []
+        self.last_with_decryption = None
 
-    def get_parameter(self, Name):
+    def get_parameter(self, Name, WithDecryption=False):
         self.calls.append(Name)
+        self.last_with_decryption = WithDecryption
         return {"Parameter": {"Value": self.params[Name]}}
 
 
@@ -203,6 +205,12 @@ def test_get_client_config_refetches_after_ttl(ssm, monkeypatch):
     main._get_client_config("BDO")
     main._get_client_config("BDO")
     assert len(ssm.calls) == 2
+
+
+def test_get_client_config_requests_with_decryption(ssm):
+    # SecureString params must decrypt; String params ignore it.
+    main._get_client_config("BDO")
+    assert ssm.last_with_decryption is True
 
 
 def test_get_client_config_invalid_json_raises_clear_error(monkeypatch):
