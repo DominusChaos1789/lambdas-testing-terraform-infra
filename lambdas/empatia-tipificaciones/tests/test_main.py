@@ -411,6 +411,18 @@ def test_read_s3_json(s3):
     assert main._read_s3_json("bucket", FULL_KEY) == SOURCE
 
 
+def test_read_s3_json_empty_object_raises_clear_error(monkeypatch):
+    fake = FakeS3({("bucket", FULL_KEY): b""})  # 0-byte object
+    monkeypatch.setattr(main, "_s3", fake)
+    with pytest.raises(RuntimeError, match="is not valid JSON"):
+        main._read_s3_json("bucket", FULL_KEY)
+
+
+def test_iter_s3_events_invalid_body_raises_clear_error():
+    with pytest.raises(RuntimeError, match="SQS message body is not valid JSON"):
+        list(main._iter_s3_events(""))
+
+
 def test_read_s3_json_passes_expected_bucket_owner(s3):
     main._read_s3_json("bucket", FULL_KEY)
     assert s3.last_kwargs["ExpectedBucketOwner"] == main.AWS_ACCOUNT_ID

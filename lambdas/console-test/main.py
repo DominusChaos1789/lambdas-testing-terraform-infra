@@ -202,7 +202,14 @@ def _client_key_from_object_key(object_key):
 
 def _read_s3_json(bucket, key):
     obj = _s3.get_object(Bucket=bucket, Key=key, ExpectedBucketOwner=AWS_ACCOUNT_ID)
-    return json.loads(obj["Body"].read().decode("utf-8"))
+    raw = obj["Body"].read().decode("utf-8")
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            f"s3://{bucket}/{key} is not valid JSON ({exc}); "
+            f"first 80 chars: {raw[:80]!r}"
+        ) from exc
 
 
 def _to_api_body(source):
@@ -232,7 +239,13 @@ def _iter_s3_events(sqs_body):
     Supports both the EventBridge "Object Created" shape and the native S3
     notification shape, so the wiring can change without touching the Lambda.
     """
-    data = json.loads(sqs_body)
+    try:
+        data = json.loads(sqs_body)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            f"SQS message body is not valid JSON ({exc}); "
+            f"first 80 chars: {sqs_body[:80]!r}"
+        ) from exc
 
     detail = data.get("detail")
     if detail and "bucket" in detail and "object" in detail:
