@@ -205,6 +205,20 @@ def test_get_client_config_refetches_after_ttl(ssm, monkeypatch):
     assert len(ssm.calls) == 2
 
 
+def test_get_client_config_invalid_json_raises_clear_error(monkeypatch):
+    fake = FakeSSM({main._client_param_name("BDO"): ""})  # empty param value
+    monkeypatch.setattr(main, "_ssm", fake)
+    with pytest.raises(RuntimeError, match="SSM parameter .* is not valid JSON"):
+        main._get_client_config("BDO")
+
+
+def test_get_secret_json_invalid_json_raises_clear_error(monkeypatch):
+    fake = FakeSecrets({SECRET_FULL: "not-json"})
+    monkeypatch.setattr(main, "_secrets", fake)
+    with pytest.raises(RuntimeError, match="Secret .* is not valid JSON"):
+        main._get_secret_json(SECRET_FULL)
+
+
 def test_get_secret_json_caches(secrets):
     assert main._get_secret_json(SECRET_FULL) == SECRET_CFG
     assert main._get_secret_json(SECRET_FULL) == SECRET_CFG

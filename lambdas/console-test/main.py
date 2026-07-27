@@ -67,7 +67,14 @@ def _get_json_param(name):
         return cached[0]
 
     resp = _ssm.get_parameter(Name=name)
-    value = json.loads(resp["Parameter"]["Value"])
+    raw = resp["Parameter"]["Value"]
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            f"SSM parameter {name} is not valid JSON ({exc}); "
+            f"first 80 chars: {raw[:80]!r}"
+        ) from exc
     _config_cache[name] = (value, now + CONFIG_TTL)
     return value
 
@@ -95,7 +102,11 @@ def _get_secret_json(secret_name):
         return cached[0]
 
     resp = _secrets.get_secret_value(SecretId=secret_name)
-    value = json.loads(resp["SecretString"])
+    raw = resp["SecretString"]
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"Secret {secret_name} is not valid JSON ({exc})") from exc
     _secret_cache[secret_name] = (value, now + CONFIG_TTL)
     return value
 
