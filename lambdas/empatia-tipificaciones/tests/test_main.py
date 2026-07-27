@@ -59,7 +59,8 @@ SOURCE = {
         {"role": "user", "content": "Buenos dias, olvide mi clave."},
     ],
 }
-# What _to_api_body should produce for the endpoint.
+# What _to_api_body should produce for the endpoint (transcripcion built from
+# the messages: assistant -> Agente, user -> Cliente).
 API_BODY = {
     "idCall": "3fd93dd5-1a36-47aa-a72b-e2a713691f7a",
     "callId": "b94230fb82d7c03cd6beae12b3288abd",
@@ -68,8 +69,11 @@ API_BODY = {
     "primerApellido": "HERRERA",
     "tipoPersona": "Natural",
     "tipoDocumento": "CC",
+    "transcripcion": (
+        "**Agente:** Hola, soy el agente virtual.\n\n"
+        "**Cliente:** Buenos dias, olvide mi clave."
+    ),
     "fechaInicio": "2026-07-23T11:08:09-05:00",
-    "messages": SOURCE["messages"],
 }
 
 
@@ -245,14 +249,26 @@ def test_get_secret_json_refetches_after_ttl(secrets, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
+def test_messages_to_transcript_maps_roles():
+    transcript = main._messages_to_transcript(
+        [
+            {"role": "assistant", "content": "A"},
+            {"role": "user", "content": "B"},
+            {"role": "system", "content": "C"},  # unknown role kept as-is
+        ]
+    )
+    assert transcript == "**Agente:** A\n\n**Cliente:** B\n\n**system:** C"
+
+
 def test_to_api_body_maps_new_structure():
     assert main._to_api_body(SOURCE) == API_BODY
 
 
 def test_to_api_body_defaults_missing_fields():
     body = main._to_api_body({"messages": [{"role": "user", "content": "hi"}]})
-    assert body["messages"] == [{"role": "user", "content": "hi"}]
+    assert body["transcripcion"] == "**Cliente:** hi"
     assert body["documento"] == ""  # missing source fields default to ""
+    assert "messages" not in body  # API wants transcripcion, not messages
 
 
 # ---------------------------------------------------------------------------

@@ -140,13 +140,14 @@ Tokens are cached **per secret**, so clients never share each other's tokens.
 ### Payload mapping (S3 object → API body)
 
 The provider stores the conversation in the **new structure** (`messages` array
-plus flat metadata). The Lambda maps it to the API body via `_to_api_body` in
-`main.py` — the endpoint receives the identity fields and the **`messages`**
-array (in place of the old `transcripcion` string):
+plus flat metadata). The API still requires the flat tipificacion body with a
+**`transcripcion`** text field, so `_to_api_body` in `main.py` renders the
+`messages` into `transcripcion` (assistant → `**Agente:**`, user → `**Cliente:**`,
+turns joined by blank lines):
 
 | S3 object (stored) | → API body |
 | --- | --- |
-| `messages` | `messages` |
+| `messages` | `transcripcion` (rendered text) |
 | `client_dni` | `documento` |
 | `client_name` | `primerNombre` |
 | `client_last_name` | `primerApellido` |
@@ -157,7 +158,7 @@ array (in place of the old `transcripcion` string):
 | `exported_at` | `fechaInicio` |
 
 Both the plaintext and the encrypted POST send this mapped body. Adjust the
-mapping in `_to_api_body` if the API field names change.
+mapping (and `_messages_to_transcript`) in `main.py` if the API changes.
 
 ### Encrypted delivery
 

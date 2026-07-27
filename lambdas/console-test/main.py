@@ -228,13 +228,29 @@ def _read_s3_json(bucket, key):
         ) from exc
 
 
+_ROLE_LABELS = {"assistant": "Agente", "user": "Cliente"}
+
+
+def _messages_to_transcript(messages):
+    """Render the provider's messages array as the transcripcion text.
+
+    assistant -> "Agente", user -> "Cliente"; turns joined with blank lines.
+    """
+    lines = [
+        f"**{_ROLE_LABELS.get(m.get('role', ''), m.get('role', ''))}:** "
+        f"{m.get('content', '')}"
+        for m in messages
+    ]
+    return "\n\n".join(lines)
+
+
 def _to_api_body(source):
     """Map the stored transcription (new provider structure) to the API body.
 
-    The provider now writes the conversation as a ``messages`` array plus flat
-    metadata; the API body keeps the tipificacion identity fields and carries
-    ``messages`` (in place of the old ``transcripcion`` markdown string). Field
-    names differ between the two, so adjust this mapping if the API changes.
+    The provider writes the conversation as a ``messages`` array plus flat
+    metadata; the API still requires the flat tipificacion body with a
+    ``transcripcion`` text field, which we render from ``messages``. Adjust this
+    mapping if the API field names change.
     """
     return {
         "idCall": source.get("genesys_cloud_id", ""),
@@ -244,8 +260,8 @@ def _to_api_body(source):
         "primerApellido": source.get("client_last_name", ""),
         "tipoPersona": source.get("person_type", ""),
         "tipoDocumento": source.get("client_dni_type", ""),
+        "transcripcion": _messages_to_transcript(source.get("messages", [])),
         "fechaInicio": source.get("exported_at", ""),
-        "messages": source.get("messages", []),
     }
 
 
