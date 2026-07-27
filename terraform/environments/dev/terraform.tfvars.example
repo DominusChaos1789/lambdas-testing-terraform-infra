@@ -5,7 +5,7 @@ stack_id   = "augusta-nexa-dev" # -> landing bucket augusta-nexa-dev-providers-l
 # kms_key_arn = "arn:aws:kms:us-east-2:575108921774:key/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 
 # The map KEY is the S3 folder under the landing prefix
-#   external/transacciones/empatia/transcripciones/<KEY>/year=.../...
+#   external/datanexa/transacciones/empatia/transcripciones/<KEY>/year=.../...
 # and also maps to the parameter/secret "<lower key>-detalle".
 # URLs are split into host + path; endpoint_path / enpoint_cypher_path are the
 # last URL segments. Credentials live in Secrets Manager (must exist before apply).

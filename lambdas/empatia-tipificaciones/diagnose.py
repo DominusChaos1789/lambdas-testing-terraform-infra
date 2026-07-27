@@ -8,14 +8,14 @@ Usage (PowerShell), from lambdas/empatia-tipificaciones:
 
     $env:STACK_ID="augusta-nexa-dev"
     $env:PARAM_PREFIX="/augusta-nexa-dev/empatia/api"
-    $env:LANDING_PREFIX="external/transacciones/empatia/transcripciones/"
+    $env:LANDING_PREFIX="external/datanexa/transacciones/empatia/transcripciones/"
     $env:AWS_ACCOUNT_ID="575108921774"
     $env:AWS_DEFAULT_REGION="us-east-2"
     $env:AWS_PROFILE="jdbarriosh-aws-dev"
     uv run python diagnose.py <bucket> <key>
 
 e.g. <bucket> = augusta-nexa-dev-providers-landing
-     <key>    = external/transacciones/empatia/transcripciones/BDO/...call.json
+     <key>    = external/datanexa/transacciones/empatia/transcripciones/BDO/...call.json
 """
 
 import sys

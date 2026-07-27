@@ -11,7 +11,7 @@ variable "landing_bucket" {
 
 variable "landing_prefix" {
   type        = string
-  default     = "external/transacciones/empatia/transcripciones/"
+  default     = "external/datanexa/transacciones/empatia/transcripciones/"
   description = "Fixed S3 key prefix providers replicate into; client key is the next segment."
 }
 

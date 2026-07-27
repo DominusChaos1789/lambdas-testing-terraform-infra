@@ -9,7 +9,7 @@ Resource names (dev), derived from `stack_id = augusta-nexa-dev`:
 | Piece | Name |
 | --- | --- |
 | Landing bucket | `augusta-nexa-dev-providers-landing` |
-| Landing prefix | `external/transacciones/empatia/transcripciones/` |
+| Landing prefix | `external/datanexa/transacciones/empatia/transcripciones/` |
 | EventBridge rule | `augusta-nexa-dev-empatia-detalle-transcription-object-created` |
 | SQS queue | `augusta-nexa-dev-empatia-transcriptions` |
 | DLQ | `augusta-nexa-dev-empatia-transcriptions-dlq` |
@@ -93,7 +93,7 @@ Set the env vars the handler needs (Terraform does this automatically):
 
 ```bash
 aws lambda update-function-configuration --function-name "$FUNCTION" --region "$AWS_REGION" \
-  --environment "Variables={STACK_ID=augusta-nexa-dev,PARAM_PREFIX=/augusta-nexa-dev/empatia/api,LANDING_PREFIX=external/transacciones/empatia/transcripciones/,AWS_ACCOUNT_ID=575108921774}"
+  --environment "Variables={STACK_ID=augusta-nexa-dev,PARAM_PREFIX=/augusta-nexa-dev/empatia/api,LANDING_PREFIX=external/datanexa/transacciones/empatia/transcripciones/,AWS_ACCOUNT_ID=575108921774}"
 ```
 
 ---

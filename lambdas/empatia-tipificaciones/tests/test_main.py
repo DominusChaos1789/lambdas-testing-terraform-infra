@@ -21,7 +21,7 @@ SECRET_REL = "empatia/api/bdo-detalle"
 SECRET_FULL = "/augusta-nexa-dev/empatia/api/bdo-detalle"
 CYPHER_KEY = "U5n1nSa2gNqye/Sfo2ZLe9jVfVljcCSKuKkFQk0tBxw="  # throwaway 32-byte AES key
 
-LANDING = "external/transacciones/empatia/transcripciones/"
+LANDING = "external/datanexa/transacciones/empatia/transcripciones/"
 FULL_KEY = f"{LANDING}BDO/year=2026/month=07/day=13/call.json"
 
 CLIENT_CFG = {

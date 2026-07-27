@@ -43,7 +43,7 @@ CLIENT_PARAM_SUFFIX = os.environ.get("CLIENT_PARAM_SUFFIX", "-detalle")
 # path segment after it (e.g. <prefix>/BDO/year=2026/month=07/day=13/file.json
 # -> "BDO"). Data lands in Hive-partitioned folders under the client segment.
 LANDING_PREFIX = os.environ.get(
-    "LANDING_PREFIX", "external/transacciones/empatia/transcripciones/"
+    "LANDING_PREFIX", "external/datanexa/transacciones/empatia/transcripciones/"
 )
 CONFIG_TTL = int(os.environ.get("CONFIG_TTL_SECONDS", "300"))
 # Account that owns the landing bucket. Passed as ExpectedBucketOwner on every

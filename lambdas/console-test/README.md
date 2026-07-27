@@ -59,7 +59,7 @@ python -c "import zipfile; n=zipfile.ZipFile('layer.zip').namelist(); print('pyt
    | --- | --- |
    | `STACK_ID` | `augusta-nexa-dev` |
    | `PARAM_PREFIX` | `/augusta-nexa-dev/empatia/api` |
-   | `LANDING_PREFIX` | `external/transacciones/empatia/transcripciones/` |
+   | `LANDING_PREFIX` | `external/datanexa/transacciones/empatia/transcripciones/` |
    | `AWS_ACCOUNT_ID` | `575108921774` |
 
 6. **Configuration → General** → timeout **30s** (token + 2 POSTs).
@@ -113,7 +113,7 @@ The handler reads a **real** S3 object, so upload one first:
 
 ```powershell
 aws s3 cp sample_payload.json `
-  "s3://augusta-nexa-dev-providers-landing/external/transacciones/empatia/transcripciones/BDO/year=2026/month=07/day=13/call-99901110121647.json" `
+  "s3://augusta-nexa-dev-providers-landing/external/datanexa/transacciones/empatia/transcripciones/BDO/year=2026/month=07/day=13/call-99901110121647.json" `
   --region us-east-2 --profile jdbarriosh-aws-dev
 ```
 

@@ -9,7 +9,7 @@ segment `dev` is the environment):
 | Thing | Value |
 | --- | --- |
 | Landing bucket | `<stack_id>-providers-landing` → `augusta-nexa-dev-providers-landing` |
-| S3 landing prefix | `external/transacciones/empatia/transcripciones/` |
+| S3 landing prefix | `external/datanexa/transacciones/empatia/transcripciones/` |
 | SSM param + secret | `/<stack_id>/empatia/api/<client>-detalle` → `/augusta-nexa-dev/empatia/api/bdo-detalle` |
 
 ```
@@ -18,8 +18,8 @@ Accenture account                Our account
 │ source bucket │ ──────────▶ │ augusta-nexa-dev-providers │
 └──────────────┘             │        -landing            │
                              └──────────────┬─────────────┘
-                              Object Created │  key: external/transacciones/empatia/
-                                             │  transcripciones/BDO/year=…/…
+                              Object Created │  key: external/datanexa/transacciones/
+                                             │  empatia/transcripciones/BDO/Year=…/…
                                              ▼
                                      ┌──────────────┐
                                      │ EventBridge  │  (rule: <prefix>/<client>/ )
@@ -94,7 +94,7 @@ Name: `/augusta-nexa-dev/empatia/api/bdo-detalle` — created by Terraform from 
   "api_path": "transcription/api/tipificaciones",
   "endpoint_path": "banco_occ",
   "enpoint_cypher_path": "bboc_encrip",
-  "bucket_prefix": "external/transacciones/empatia/transcripciones/BDO/",
+  "bucket_prefix": "external/datanexa/transacciones/empatia/transcripciones/BDO/",
   "secret_name": "empatia/api/bdo-detalle",
   "enabled": true
 }
@@ -120,7 +120,7 @@ Name: `/augusta-nexa-dev/empatia/api/bdo-detalle` — created by Terraform from 
 ## How one file flows end to end
 
 ```
-S3 key:  external/transacciones/empatia/transcripciones/BDO/year=2026/month=07/day=13/call.json
+S3 key:  external/datanexa/transacciones/empatia/transcripciones/BDO/year=2026/month=07/day=13/call.json
          └──────────────── landing prefix ───────────────┘└┬┘
                                                client_key ─┘ = "BDO"
                                                             │
@@ -205,7 +205,7 @@ aws ssm put-parameter \
   --name "/augusta-nexa-dev/empatia/api/bdo-detalle" \
   --type String \
   --overwrite \
-  --value '{"token_url":"https://login-server-staging.nexabpo.com","token_path":"auth/realms/nexa/protocol/openid-connect/token","api_url":"https://nexa-empatia-staging.nexabpo.com","api_path":"transcription/api/tipificaciones","endpoint_path":"banco_occ","enpoint_cypher_path":"bboc_encrip","bucket_prefix":"external/transacciones/empatia/transcripciones/BDO/","secret_name":"empatia/api/bdo-detalle","enabled":true}'
+  --value '{"token_url":"https://login-server-staging.nexabpo.com","token_path":"auth/realms/nexa/protocol/openid-connect/token","api_url":"https://nexa-empatia-staging.nexabpo.com","api_path":"transcription/api/tipificaciones","endpoint_path":"banco_occ","enpoint_cypher_path":"bboc_encrip","bucket_prefix":"external/datanexa/transacciones/empatia/transcripciones/BDO/","secret_name":"empatia/api/bdo-detalle","enabled":true}'
 ```
 
 The Lambda caches parameters in memory for `CONFIG_TTL_SECONDS` (default 300s),
@@ -231,7 +231,7 @@ so a manual change is picked up within ~5 minutes without a redeploy.
    ```
 3. `terraform apply` — creates `/augusta-nexa-dev/empatia/api/bdb-detalle`
    and extends the EventBridge rule to route the
-   `external/transacciones/empatia/transcripciones/BDB/` prefix.
+   `external/datanexa/transacciones/empatia/transcripciones/BDB/` prefix.
 4. Providers drop files under `.../transcripciones/BDB/...`. **No Lambda change or redeploy.**
 
 ---
@@ -244,7 +244,7 @@ reading). Quick end-to-end:
 
 ```bash
 aws s3 cp ../lambdas/empatia-tipificaciones/sample_payload.json \
-  "s3://augusta-nexa-dev-providers-landing/external/transacciones/empatia/transcripciones/BDO/year=2026/month=07/day=13/sample.json"
+  "s3://augusta-nexa-dev-providers-landing/external/datanexa/transacciones/empatia/transcripciones/BDO/year=2026/month=07/day=13/sample.json"
 ```
 
 Console test events live in
