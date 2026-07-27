@@ -411,6 +411,13 @@ def test_read_s3_json(s3):
     assert main._read_s3_json("bucket", FULL_KEY) == SOURCE
 
 
+def test_read_s3_json_strips_utf8_bom(monkeypatch):
+    # Files written on Windows may carry a UTF-8 BOM; it must not break parsing.
+    fake = FakeS3({("bucket", FULL_KEY): b"\xef\xbb\xbf" + json.dumps(SOURCE).encode()})
+    monkeypatch.setattr(main, "_s3", fake)
+    assert main._read_s3_json("bucket", FULL_KEY) == SOURCE
+
+
 def test_read_s3_json_empty_object_raises_clear_error(monkeypatch):
     fake = FakeS3({("bucket", FULL_KEY): b""})  # 0-byte object
     monkeypatch.setattr(main, "_s3", fake)

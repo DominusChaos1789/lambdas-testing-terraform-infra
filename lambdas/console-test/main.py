@@ -202,7 +202,9 @@ def _client_key_from_object_key(object_key):
 
 def _read_s3_json(bucket, key):
     obj = _s3.get_object(Bucket=bucket, Key=key, ExpectedBucketOwner=AWS_ACCOUNT_ID)
-    raw = obj["Body"].read().decode("utf-8")
+    # utf-8-sig strips a leading UTF-8 BOM (common when files are written on
+    # Windows) which would otherwise break json.loads at char 0.
+    raw = obj["Body"].read().decode("utf-8-sig")
     try:
         return json.loads(raw)
     except json.JSONDecodeError as exc:
