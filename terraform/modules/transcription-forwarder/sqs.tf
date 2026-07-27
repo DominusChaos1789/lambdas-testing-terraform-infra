@@ -1,6 +1,6 @@
 # Dead-letter queue for poison messages (bad JSON, permanent API failures).
 resource "aws_sqs_queue" "dlq" {
-  name                      = "${local.name}-transcriptions-dlq"
+  name                      = local.dlq_name
   message_retention_seconds = 1209600 # 14 days
   tags                      = local.common_tags
 }
@@ -8,7 +8,7 @@ resource "aws_sqs_queue" "dlq" {
 # Main buffer between S3/EventBridge and the Lambda. Visibility timeout must be
 # >= 6x the Lambda timeout so a message is not re-delivered while in flight.
 resource "aws_sqs_queue" "transcriptions" {
-  name                       = "${local.name}-transcriptions"
+  name                       = local.queue_name
   visibility_timeout_seconds = var.lambda_timeout * 6
   message_retention_seconds  = 345600 # 4 days
   redrive_policy = jsonencode({
