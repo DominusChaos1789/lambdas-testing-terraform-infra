@@ -28,6 +28,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime
 
 import boto3
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -228,6 +229,18 @@ def _read_s3_json(bucket, key):
         ) from exc
 
 
+def _format_fecha(value):
+    """ISO-8601 (e.g. 2026-07-23T11:08:09-05:00) -> MM/DD/YYYY HH:MM:SS.
+
+    Keeps the wall-clock time as written (offset ignored). Passes the value
+    through unchanged if it isn't parseable ISO-8601.
+    """
+    try:
+        return datetime.fromisoformat(value).strftime("%m/%d/%Y %H:%M:%S")
+    except (ValueError, TypeError):
+        return value
+
+
 _ROLE_LABELS = {"assistant": "Agente", "user": "Cliente"}
 
 
@@ -261,7 +274,7 @@ def _to_api_body(source):
         "tipoPersona": source.get("person_type", ""),
         "tipoDocumento": source.get("client_dni_type", ""),
         "transcripcion": _messages_to_transcript(source.get("messages", [])),
-        "fechaInicio": source.get("exported_at", ""),
+        "fechaInicio": _format_fecha(source.get("exported_at", "")),
     }
 
 

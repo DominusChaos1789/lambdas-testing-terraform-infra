@@ -73,7 +73,7 @@ API_BODY = {
         "**Agente:** Hola, soy el agente virtual.\n\n"
         "**Cliente:** Buenos dias, olvide mi clave."
     ),
-    "fechaInicio": "2026-07-23T11:08:09-05:00",
+    "fechaInicio": "07/23/2026 11:08:09",  # reformatted from exported_at
 }
 
 
@@ -247,6 +247,15 @@ def test_get_secret_json_refetches_after_ttl(secrets, monkeypatch):
 # ---------------------------------------------------------------------------
 # _to_api_body
 # ---------------------------------------------------------------------------
+
+
+def test_format_fecha_iso_to_mmddyyyy():
+    assert main._format_fecha("2026-07-23T11:08:09-05:00") == "07/23/2026 11:08:09"
+
+
+def test_format_fecha_passes_through_unparseable():
+    assert main._format_fecha("") == ""
+    assert main._format_fecha("not a date") == "not a date"
 
 
 def test_messages_to_transcript_maps_roles():
