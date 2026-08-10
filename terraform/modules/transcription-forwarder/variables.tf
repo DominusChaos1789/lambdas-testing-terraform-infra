@@ -31,7 +31,7 @@ variable "clients" {
     token_path          = string           # auth/realms/nexa/protocol/openid-connect/token
     api_url             = string           # host, e.g. https://nexa-empatia-staging.nexabpo.com
     api_path            = string           # transcription/api/tipificaciones
-    endpoint_path       = string           # banco_occ
+    endpoint_path       = optional(string) # banco_occ (omit to send only the encrypted copy)
     enpoint_cypher_path = optional(string) # bboc_encrip (sic - matches config key)
     secret_name         = optional(string) # relative, e.g. empatia/api/bdo-detalle
     enabled             = optional(bool, true)

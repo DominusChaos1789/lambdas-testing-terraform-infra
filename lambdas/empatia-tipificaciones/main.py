@@ -339,23 +339,46 @@ def _process_object(bucket, key):
     body = _to_api_body(_read_s3_json(bucket, key))
 
     token_url = _join_url(client_cfg["token_url"], client_cfg["token_path"])
-    token = _get_access_token(token_url, creds, secret_name)
     api_base = _join_url(client_cfg["api_url"], client_cfg["api_path"])
 
-    # Plaintext delivery.
-    _forward(
-        _join_url(api_base, client_cfg["endpoint_path"]),
-        body,
-        token,
-        bucket,
-        key,
-        "plain",
-    )
-
-    # Encrypted delivery (only when both the endpoint path and key are set).
+    endpoint_path = client_cfg.get("endpoint_path")
     cypher_path = _cypher_path(client_cfg)
     cypher_code = creds.get("cypher_code")
-    if cypher_path and cypher_code:
+    do_plain = bool(endpoint_path)
+    do_cypher = bool(cypher_path and cypher_code)
+
+    if not (do_plain or do_cypher):
+        raise RuntimeError(
+            f"Client '{client_key}' has no delivery configured: set endpoint_path "
+            f"and/or enpoint_cypher_path (with cypher_code) in {_client_param_name(client_key)}"
+        )
+
+    token = _get_access_token(token_url, creds, secret_name)
+
+    # Plaintext delivery. Best-effort when an encrypted copy is also configured:
+    # if the plain POST fails but the encrypted one is the delivery that matters,
+    # log the error and keep going so the message still succeeds. When plain is
+    # the ONLY delivery, its failure must surface so SQS retries the message.
+    if do_plain:
+        try:
+            _forward(
+                _join_url(api_base, endpoint_path),
+                body,
+                token,
+                bucket,
+                key,
+                "plain",
+            )
+        except Exception as exc:  # noqa: BLE001 - tolerated only if encrypted runs
+            if not do_cypher:
+                raise
+            print(
+                f"Plain delivery failed for s3://{bucket}/{key}, "
+                f"continuing to encrypted: {exc}"
+            )
+
+    # Encrypted delivery (only when both the cypher path and key are set).
+    if do_cypher:
         encrypted = {"payload": _encrypt_payload(body, cypher_code)}
         _forward(
             _join_url(api_base, cypher_path), encrypted, token, bucket, key, "encrypted"
