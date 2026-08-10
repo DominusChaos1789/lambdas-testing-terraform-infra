@@ -562,6 +562,40 @@ def test_process_object_plain_and_encrypted(monkeypatch, ssm, secrets, s3):
     assert aes_decrypt(posted[1][1]["payload"], CYPHER_KEY) == API_BODY
 
 
+def test_process_object_cypher_only_when_no_endpoint_path(monkeypatch, secrets, s3):
+    # Client dropped the plaintext endpoint_path and only keeps the cypher path.
+    cfg = {k: v for k, v in CLIENT_CFG.items() if k != "endpoint_path"}
+    monkeypatch.setattr(main, "_get_client_config", lambda key: cfg)
+    secrets.secrets[SECRET_FULL] = json.dumps(SECRET_CFG_ENC)
+    monkeypatch.setattr(main, "_get_access_token", lambda url, creds, key: "tok")
+    posted = []
+
+    def fake_post(url, body, tok):
+        posted.append((url, body))
+        return 200, "{}"
+
+    monkeypatch.setattr(main, "_post_json", fake_post)
+    main._process_object("bucket", FULL_KEY)
+
+    # only the encrypted copy is sent
+    assert [p[0] for p in posted] == [FULL_CYPHER_URL]
+    assert aes_decrypt(posted[0][1]["payload"], CYPHER_KEY) == API_BODY
+
+
+def test_process_object_raises_when_no_delivery_configured(monkeypatch, secrets, s3):
+    # Neither a plaintext endpoint_path nor a usable cypher path/key.
+    cfg = {
+        k: v
+        for k, v in CLIENT_CFG.items()
+        if k not in ("endpoint_path", "enpoint_cypher_path")
+    }
+    monkeypatch.setattr(main, "_get_client_config", lambda key: cfg)
+    monkeypatch.setattr(main, "_get_access_token", lambda url, creds, key: "tok")
+    monkeypatch.setattr(main, "_post_json", lambda *a: (200, "{}"))
+    with pytest.raises(RuntimeError, match="no delivery configured"):
+        main._process_object("bucket", FULL_KEY)
+
+
 def test_process_object_allows_missing_bucket_prefix(monkeypatch, secrets, s3):
     cfg = {k: v for k, v in CLIENT_CFG.items() if k != "bucket_prefix"}
     monkeypatch.setattr(main, "_get_client_config", lambda key: cfg)
@@ -575,6 +609,29 @@ def test_process_object_raises_on_plain_api_error(monkeypatch, ssm, secrets, s3)
     monkeypatch.setattr(main, "_post_json", lambda *a: (502, "bad gateway"))
     with pytest.raises(RuntimeError, match="502 .plain."):
         main._process_object("bucket", FULL_KEY)
+
+
+def test_process_object_tolerates_plain_error_when_encrypted_configured(
+    monkeypatch, ssm, secrets, s3
+):
+    # endpoint_path stays configured; the plain POST fails but the encrypted copy
+    # is what matters, so the message still succeeds.
+    secrets.secrets[SECRET_FULL] = json.dumps(SECRET_CFG_ENC)
+    monkeypatch.setattr(main, "_get_access_token", lambda url, creds, key: "tok")
+    posted = []
+
+    def fake_post(url, body, tok):
+        if url == FULL_PLAIN_URL:
+            return 502, "bad gateway"  # plain endpoint erroring
+        posted.append((url, body))
+        return 200, "{}"
+
+    monkeypatch.setattr(main, "_post_json", fake_post)
+    main._process_object("bucket", FULL_KEY)  # no exception raised
+
+    # only the encrypted copy landed; the plain failure was swallowed
+    assert [p[0] for p in posted] == [FULL_CYPHER_URL]
+    assert aes_decrypt(posted[0][1]["payload"], CYPHER_KEY) == API_BODY
 
 
 def test_process_object_raises_on_encrypted_api_error(monkeypatch, ssm, secrets, s3):

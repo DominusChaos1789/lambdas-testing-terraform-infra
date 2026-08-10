@@ -15,7 +15,7 @@ segment `dev` is the environment):
 ```
 Accenture account                Our account
 ┌──────────────┐   S3 repl   ┌───────────────────────────┐
-│ source bucket │ ──────────▶ │ augusta-nexa-dev-providers │
+│ source bucket │ ─────────▶ │ augusta-nexa-dev-providers │
 └──────────────┘             │        -landing            │
                              └──────────────┬─────────────┘
                               Object Created │  key: external/datanexa/transacciones/
@@ -33,7 +33,7 @@ Accenture account                Our account
                                  ┌──────────────────┐
                                  │ Lambda forwarder │
                                  └─────────┬────────┘
-                        ┌──────────────────┼───────────────────┐
+                        ┌──────────────────┬───────────────────┐
                         ▼                  ▼                   ▼
           SSM .../api/<client>-detalle   Secrets Manager    S3 GetObject
           (String, JSON: routing)        <client>-detalle   (read payload)
@@ -104,7 +104,7 @@ Name: `/augusta-nexa-dev/empatia/api/bdo-detalle` — created by Terraform from 
 | --- | --- |
 | `token_url` + `token_path` | Keycloak token endpoint = `token_url/token_path` |
 | `api_url` + `api_path` | EmpatIA API base = `api_url/api_path` |
-| `endpoint_path` | Last URL segment for the plaintext POST (`banco_occ`) |
+| `endpoint_path` | Last URL segment for the plaintext POST (`banco_occ`); omit to send only the encrypted copy |
 | `enpoint_cypher_path` | Last URL segment for the encrypted POST (`bboc_encrip`); omit to disable |
 | `bucket_prefix` | Expected S3 prefix; objects outside it are rejected |
 | `secret_name` | **Environment-relative** secret name; the Lambda prepends `/<stack>/` |
@@ -131,9 +131,20 @@ SSM   :  /augusta-nexa-dev/empatia/api/bdo-detalle   (STACK_ID + "bdo" + "-detal
              ├─ token_url+path  -> POST creds -> access_token   (cached per secret)
              └─ api_url + api_path
                                                             │
-POST 1 : .../tipificaciones/banco_occ      <- plaintext payload
+POST 1 : .../tipificaciones/banco_occ      <- plaintext payload   (only if endpoint_path set)
 POST 2 : .../tipificaciones/bboc_encrip    <- {"payload": AES-256(payload)}  (only if enpoint_cypher_path + cypher_code set)
 ```
+
+At least one of `endpoint_path` / `enpoint_cypher_path` must be configured; a
+client with neither raises (nothing to deliver). A client that keeps only
+`enpoint_cypher_path` (+ `cypher_code`) sends **just the encrypted copy**.
+
+When a plaintext endpoint is configured **alongside** an encrypted one, a failing
+plaintext POST is logged and swallowed so the message still succeeds on the
+encrypted delivery; a plaintext failure only fails the message (SQS retry) when
+plaintext is the **only** delivery. A persistently broken plaintext endpoint
+therefore shows up in the logs (grep `Plain delivery failed`), not the DLQ — add
+a CloudWatch Logs metric filter if you want to alarm on it.
 
 Tokens are cached **per secret**, so clients never share each other's tokens.
 
