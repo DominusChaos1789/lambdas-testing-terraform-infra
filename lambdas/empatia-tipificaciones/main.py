@@ -50,6 +50,11 @@ CONFIG_TTL = int(os.environ.get("CONFIG_TTL_SECONDS", "300"))
 # Account that owns the landing bucket. Passed as ExpectedBucketOwner on every
 # S3 read so a bucket deleted and re-created in another account cannot be read.
 AWS_ACCOUNT_ID = os.environ.get("AWS_ACCOUNT_ID", "")
+# Debug aid: when "true", log each object's raw content to CloudWatch so the
+# payload structure can be inspected in environments where the bucket can't be
+# queried or downloaded. Off by default -- the raw payload contains PII, so only
+# enable it temporarily (e.g. in staging) and turn it off once confirmed.
+LOG_RAW_PAYLOAD = os.environ.get("LOG_RAW_PAYLOAD", "false").lower() == "true"
 
 _ssm = boto3.client("ssm")
 _s3 = boto3.client("s3")
@@ -220,6 +225,9 @@ def _read_s3_json(bucket, key):
     # utf-8-sig strips a leading UTF-8 BOM (common when files are written on
     # Windows) which would otherwise break json.loads at char 0.
     raw = obj["Body"].read().decode("utf-8-sig")
+    if LOG_RAW_PAYLOAD:
+        # Structure-discovery aid (PII); gated by the LOG_RAW_PAYLOAD env var.
+        print(f"Raw payload s3://{bucket}/{key}: {raw}")
     try:
         return json.loads(raw)
     except json.JSONDecodeError as exc:

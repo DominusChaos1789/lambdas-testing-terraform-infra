@@ -472,6 +472,20 @@ def test_read_s3_json_empty_object_raises_clear_error(monkeypatch):
         main._read_s3_json("bucket", FULL_KEY)
 
 
+def test_read_s3_json_logs_raw_when_enabled(monkeypatch, capsys, s3):
+    monkeypatch.setattr(main, "LOG_RAW_PAYLOAD", True)
+    main._read_s3_json("bucket", FULL_KEY)
+    out = capsys.readouterr().out
+    assert "Raw payload" in out
+    assert "NICOLASS" in out  # raw content is echoed so the structure is visible
+
+
+def test_read_s3_json_no_raw_log_by_default(monkeypatch, capsys, s3):
+    monkeypatch.setattr(main, "LOG_RAW_PAYLOAD", False)
+    main._read_s3_json("bucket", FULL_KEY)
+    assert "Raw payload" not in capsys.readouterr().out
+
+
 def test_iter_s3_events_invalid_body_raises_clear_error():
     with pytest.raises(RuntimeError, match="SQS message body is not valid JSON"):
         list(main._iter_s3_events(""))
