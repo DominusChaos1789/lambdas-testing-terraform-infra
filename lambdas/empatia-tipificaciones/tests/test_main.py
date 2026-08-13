@@ -74,6 +74,10 @@ API_BODY = {
         "**Cliente:** Buenos dias, olvide mi clave."
     ),
     "fechaInicio": "07/23/2026 11:08:09",  # reformatted from exported_at
+    # Fields not in the explicit rename map pass through under their original
+    # names (tenant_id / turns exist in SOURCE but aren't renamed).
+    "tenant_id": "banco_occidente",
+    "turns": 2,
 }
 
 
@@ -280,6 +284,21 @@ def test_to_api_body_defaults_missing_fields():
     assert "messages" not in body  # API wants transcripcion, not messages
 
 
+def test_to_api_body_passes_through_new_fields():
+    # A field the provider adds later (not in the rename map) is forwarded to the
+    # API under its ORIGINAL name; the existing renames are unchanged.
+    src = {**SOURCE, "conversation_state": "in course", "nuevo_campo": 123}
+    body = main._to_api_body(src)
+
+    assert body["documento"] == "1063228193"  # renamed field still mapped
+    assert body["conversation_state"] == "in course"  # new field, original name
+    assert body["nuevo_campo"] == 123
+    # consumed originals are not duplicated under their raw names
+    assert "client_dni" not in body
+    assert "messages" not in body
+    assert "exported_at" not in body
+
+
 # ---------------------------------------------------------------------------
 # _encrypt_payload
 # ---------------------------------------------------------------------------
@@ -472,18 +491,27 @@ def test_read_s3_json_empty_object_raises_clear_error(monkeypatch):
         main._read_s3_json("bucket", FULL_KEY)
 
 
-def test_read_s3_json_logs_raw_when_enabled(monkeypatch, capsys, s3):
-    monkeypatch.setattr(main, "LOG_RAW_PAYLOAD", True)
+def test_read_s3_json_logs_field_names_when_enabled(monkeypatch, capsys, s3):
+    monkeypatch.setattr(main, "LOG_PAYLOAD_FIELDS", True)
     main._read_s3_json("bucket", FULL_KEY)
     out = capsys.readouterr().out
-    assert "Raw payload" in out
-    assert "NICOLASS" in out  # raw content is echoed so the structure is visible
+    assert "Payload fields" in out
+    assert "client_name" in out  # field NAMES are shown...
+    assert "NICOLASS" not in out  # ...but values (PII) are NOT
 
 
-def test_read_s3_json_no_raw_log_by_default(monkeypatch, capsys, s3):
-    monkeypatch.setattr(main, "LOG_RAW_PAYLOAD", False)
+def test_read_s3_json_no_field_log_by_default(monkeypatch, capsys, s3):
+    monkeypatch.setattr(main, "LOG_PAYLOAD_FIELDS", False)
     main._read_s3_json("bucket", FULL_KEY)
-    assert "Raw payload" not in capsys.readouterr().out
+    assert "Payload fields" not in capsys.readouterr().out
+
+
+def test_read_s3_json_logs_type_for_non_object(monkeypatch, capsys):
+    fake = FakeS3({("bucket", FULL_KEY): b"[1, 2, 3]"})  # valid JSON, not an object
+    monkeypatch.setattr(main, "_s3", fake)
+    monkeypatch.setattr(main, "LOG_PAYLOAD_FIELDS", True)
+    assert main._read_s3_json("bucket", FULL_KEY) == [1, 2, 3]
+    assert "Payload fields" in capsys.readouterr().out
 
 
 def test_iter_s3_events_invalid_body_raises_clear_error():

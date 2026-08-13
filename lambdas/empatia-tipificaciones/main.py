@@ -50,11 +50,11 @@ CONFIG_TTL = int(os.environ.get("CONFIG_TTL_SECONDS", "300"))
 # Account that owns the landing bucket. Passed as ExpectedBucketOwner on every
 # S3 read so a bucket deleted and re-created in another account cannot be read.
 AWS_ACCOUNT_ID = os.environ.get("AWS_ACCOUNT_ID", "")
-# Debug aid: when "true", log each object's raw content to CloudWatch so the
-# payload structure can be inspected in environments where the bucket can't be
-# queried or downloaded. Off by default -- the raw payload contains PII, so only
-# enable it temporarily (e.g. in staging) and turn it off once confirmed.
-LOG_RAW_PAYLOAD = os.environ.get("LOG_RAW_PAYLOAD", "false").lower() == "true"
+# Debug aid: when "true", log each object's top-level field NAMES (not values,
+# so no PII) to CloudWatch so new provider fields can be spotted in environments
+# where the bucket can't be queried or downloaded. Off by default; toggling this
+# env var needs no code redeploy.
+LOG_PAYLOAD_FIELDS = os.environ.get("LOG_PAYLOAD_FIELDS", "false").lower() == "true"
 
 _ssm = boto3.client("ssm")
 _s3 = boto3.client("s3")
@@ -225,16 +225,21 @@ def _read_s3_json(bucket, key):
     # utf-8-sig strips a leading UTF-8 BOM (common when files are written on
     # Windows) which would otherwise break json.loads at char 0.
     raw = obj["Body"].read().decode("utf-8-sig")
-    if LOG_RAW_PAYLOAD:
-        # Structure-discovery aid (PII); gated by the LOG_RAW_PAYLOAD env var.
-        print(f"Raw payload s3://{bucket}/{key}: {raw}")
     try:
-        return json.loads(raw)
+        data = json.loads(raw)
     except json.JSONDecodeError as exc:
         raise RuntimeError(
             f"s3://{bucket}/{key} is not valid JSON ({exc}); "
             f"first 80 chars: {raw[:80]!r}"
         ) from exc
+    if LOG_PAYLOAD_FIELDS:
+        # Log only the top-level field NAMES (no values -> no PII) so new provider
+        # fields can be spotted in CloudWatch without querying the bucket.
+        fields = (
+            sorted(data.keys()) if isinstance(data, dict) else [type(data).__name__]
+        )
+        print(f"Payload fields s3://{bucket}/{key}: {fields}")
+    return data
 
 
 def _format_fecha(value):
@@ -265,15 +270,36 @@ def _messages_to_transcript(messages):
     return "\n\n".join(lines)
 
 
+# Original source fields consumed by the explicit mapping below (renamed to an
+# API name or rendered). Every OTHER field found in the object is forwarded under
+# its ORIGINAL name, so a new provider field reaches the API without a code
+# change; these are excluded from that pass-through to avoid duplicates.
+_MAPPED_SOURCE_KEYS = frozenset(
+    {
+        "genesys_cloud_id",
+        "trace_id",
+        "client_dni",
+        "client_name",
+        "client_last_name",
+        "person_type",
+        "client_dni_type",
+        "messages",
+        "exported_at",
+    }
+)
+
+
 def _to_api_body(source):
     """Map the stored transcription (new provider structure) to the API body.
 
     The provider writes the conversation as a ``messages`` array plus flat
     metadata; the API still requires the flat tipificacion body with a
-    ``transcripcion`` text field, which we render from ``messages``. Adjust this
-    mapping if the API field names change.
+    ``transcripcion`` text field, which we render from ``messages``. The explicit
+    renames below are fixed; any *other* field the provider adds later is passed
+    through under its original name (see ``_MAPPED_SOURCE_KEYS``) so onboarding a
+    new field needs no code change. Adjust the renames if the API changes.
     """
-    return {
+    body = {
         "idCall": source.get("genesys_cloud_id", ""),
         "callId": source.get("trace_id", ""),
         "documento": source.get("client_dni", ""),
@@ -284,6 +310,11 @@ def _to_api_body(source):
         "transcripcion": _messages_to_transcript(source.get("messages", [])),
         "fechaInicio": _format_fecha(source.get("exported_at", "")),
     }
+    # Forward any field we don't explicitly rename, keeping its original name.
+    for key, value in source.items():
+        if key not in _MAPPED_SOURCE_KEYS and key not in body:
+            body[key] = value
+    return body
 
 
 def _iter_s3_events(sqs_body):
