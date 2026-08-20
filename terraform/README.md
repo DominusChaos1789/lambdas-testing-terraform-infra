@@ -1,0 +1,274 @@
+# Transcription forwarder infrastructure
+
+Event-driven pipeline that forwards provider transcriptions (dropped in the
+landing S3 bucket via cross-account replication) to the EmpatIA API.
+
+Naming is derived from `stack_id` (e.g. `augusta-nexa-dev`, whose trailing
+segment `dev` is the environment):
+
+| Thing | Value |
+| --- | --- |
+| Landing bucket | `<stack_id>-providers-landing` → `augusta-nexa-dev-providers-landing` |
+| S3 landing prefix | `external/datanexa/transacciones/empatia/transcripciones/` |
+| SSM param + secret | `/<stack_id>/empatia/api/<client>-detalle` → `/augusta-nexa-dev/empatia/api/bdo-detalle` |
+
+```
+Accenture account                Our account
+┌──────────────┐   S3 repl   ┌───────────────────────────┐
+│ source bucket │ ─────────▶ │ augusta-nexa-dev-providers │
+└──────────────┘             │        -landing            │
+                             └──────────────┬─────────────┘
+                              Object Created │  key: external/datanexa/transacciones/
+                                             │  empatia/transcripciones/BDO/Year=…/…
+                                             ▼
+                                     ┌──────────────┐
+                                     │ EventBridge  │  (rule: <prefix>/<client>/ )
+                                     └──────┬───────┘
+                                            ▼
+                                 ┌────────────────────┐   maxReceiveCount   ┌─────┐
+                                 │ SQS transcriptions │ ──────────────────▶ │ DLQ │
+                                 └─────────┬──────────┘                     └─────┘
+                                           │ event source mapping (batch, partial failures)
+                                           ▼
+                                 ┌──────────────────┐
+                                 │ Lambda forwarder │
+                                 └─────────┬────────┘
+                        ┌──────────────────┬───────────────────┐
+                        ▼                  ▼                   ▼
+          SSM .../api/<client>-detalle   Secrets Manager    S3 GetObject
+          (String, JSON: routing)        <client>-detalle   (read payload)
+                                         (client_id/secret)
+                        │                  │                      │
+                        └───────── POST Bearer token ─────────────┴──▶ EmpatIA API
+```
+
+## Layout
+
+```
+terraform/
+  modules/transcription-forwarder/   # reusable module (sqs, dlq, eventbridge, lambda, ssm, iam)
+  environments/dev/                  # dev composition -> module call + tfvars
+```
+
+---
+
+## Configuration: Secrets Manager + Parameter Store
+
+Config is split by sensitivity. **Credentials never live in Parameter Store or
+Terraform state.**
+
+Both the routing parameter and the secret share the name `<client>-detalle`
+under `/<stack_id>/empatia/api` (e.g. `BDO` → `bdo-detalle`).
+
+| Store | Path | Holds |
+| --- | --- | --- |
+| Secrets Manager | `/<stack>/empatia/api/<client>-detalle` | `client_id`, `client_secret`, `grant_type`, and (optional) `cypher_code` |
+| Parameter Store | `/<stack>/empatia/api/<client>-detalle` | `token_url`+`token_path`, `api_url`+`api_path`, `endpoint_path`, `enpoint_cypher_path`, `bucket_prefix`, `secret_name`, `enabled` |
+
+### 1. Credentials — Secrets Manager (one secret per client)
+
+Name: `/augusta-nexa-dev/empatia/api/bdo-detalle` (encrypted with the
+`augusta-nexa-dev` CMK). Managed **outside** this module — Terraform only reads it.
+
+```json
+{
+  "client_id": "Connection.Apis.Auth",
+  "client_secret": "REPLACE_WITH_REAL_CLIENT_SECRET",
+  "grant_type": "client_credentials",
+  "cypher_code": "REPLACE_WITH_BASE64_AES256_KEY"
+}
+```
+
+`cypher_code` is only needed for clients that use encrypted delivery.
+
+### 2. Routing — Parameter Store (one `String` param per client)
+
+Name: `/augusta-nexa-dev/empatia/api/bdo-detalle` — created by Terraform from the
+`clients` map. URLs are split into host + path so environments vary them freely.
+
+```json
+{
+  "token_url": "https://login-server-staging.nexabpo.com",
+  "token_path": "auth/realms/nexa/protocol/openid-connect/token",
+  "api_url": "https://nexa-empatia-staging.nexabpo.com",
+  "api_path": "transcription/api/tipificaciones",
+  "endpoint_path": "banco_occ",
+  "enpoint_cypher_path": "bboc_encrip",
+  "bucket_prefix": "external/datanexa/transacciones/empatia/transcripciones/BDO/",
+  "secret_name": "empatia/api/bdo-detalle",
+  "enabled": true
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `token_url` + `token_path` | Keycloak token endpoint = `token_url/token_path` |
+| `api_url` + `api_path` | EmpatIA API base = `api_url/api_path` |
+| `endpoint_path` | Last URL segment for the plaintext POST (`banco_occ`); omit to send only the encrypted copy |
+| `enpoint_cypher_path` | Last URL segment for the encrypted POST (`bboc_encrip`); omit to disable |
+| `bucket_prefix` | Expected S3 prefix; objects outside it are rejected |
+| `secret_name` | **Environment-relative** secret name; the Lambda prepends `/<stack>/` |
+| `enabled` | `false` pauses forwarding without deleting anything |
+
+> The `secret_name` is stored without the `/<stack>/` prefix so the same config
+> promotes across `augusta-nexa-dev` / `-stg` / `-pro`. The `enpoint_cypher_path`
+> field name matches the config's spelling (the Lambda also accepts the corrected
+> `endpoint_cypher_path`).
+
+---
+
+## How one file flows end to end
+
+```
+S3 key:  external/datanexa/transacciones/empatia/transcripciones/BDO/year=2026/month=07/day=13/call.json
+         └──────────────── landing prefix ───────────────┘└┬┘
+                                               client_key ─┘ = "BDO"
+                                                            │
+SSM   :  /augusta-nexa-dev/empatia/api/bdo-detalle   (STACK_ID + "bdo" + "-detalle")
+             ├─ bucket_prefix   -> verify the key belongs to this client
+             ├─ secret_name     -> /<stack>/empatia/api/bdo-detalle
+             │      └─ Secrets Manager: client_id / client_secret / grant_type / cypher_code
+             ├─ token_url+path  -> POST creds -> access_token   (cached per secret)
+             └─ api_url + api_path
+                                                            │
+POST 1 : .../tipificaciones/banco_occ      <- plaintext payload   (only if endpoint_path set)
+POST 2 : .../tipificaciones/bboc_encrip    <- {"payload": AES-256(payload)}  (only if enpoint_cypher_path + cypher_code set)
+```
+
+At least one of `endpoint_path` / `enpoint_cypher_path` must be configured; a
+client with neither raises (nothing to deliver). A client that keeps only
+`enpoint_cypher_path` (+ `cypher_code`) sends **just the encrypted copy**.
+
+When a plaintext endpoint is configured **alongside** an encrypted one, a failing
+plaintext POST is logged and swallowed so the message still succeeds on the
+encrypted delivery; a plaintext failure only fails the message (SQS retry) when
+plaintext is the **only** delivery. A persistently broken plaintext endpoint
+therefore shows up in the logs (grep `Plain delivery failed`), not the DLQ — add
+a CloudWatch Logs metric filter if you want to alarm on it.
+
+Tokens are cached **per secret**, so clients never share each other's tokens.
+
+### Payload mapping (S3 object → API body)
+
+The provider stores the conversation in the **new structure** (`messages` array
+plus flat metadata). The API still requires the flat tipificacion body with a
+**`transcripcion`** text field, so `_to_api_body` in `main.py` renders the
+`messages` into `transcripcion` (assistant → `**Agente:**`, user → `**Cliente:**`,
+turns joined by blank lines):
+
+| S3 object (stored) | → API body |
+| --- | --- |
+| `messages` | `transcripcion` (rendered text) |
+| `client_dni` | `documento` |
+| `client_name` | `primerNombre` |
+| `client_last_name` | `primerApellido` |
+| `person_type` | `tipoPersona` |
+| `client_dni_type` | `tipoDocumento` |
+| `genesys_cloud_id` | `idCall` |
+| `trace_id` | `callId` |
+| `exported_at` | `fechaInicio` |
+
+Both the plaintext and the encrypted POST send this mapped body. Adjust the
+mapping (and `_messages_to_transcript`) in `main.py` if the API changes.
+
+### Encrypted delivery
+
+When the parameter defines `enpoint_cypher_path` **and** the secret defines
+`cypher_code`, the Lambda also POSTs an encrypted copy to
+`api_url/api_path/enpoint_cypher_path` as `{"payload": "<base64>"}`.
+
+> ⚠️ The cipher is **AES-256-GCM** — output is `base64(nonce[12] + ciphertext +
+> tag[16])`; see `_encrypt_payload` in `main.py`. The decryptor reads the first
+> 12 bytes as the nonce, then `AESGCM.decrypt(nonce, rest)`. This must match what
+> the EmpatIA endpoint decrypts with; change only that function if it differs.
+
+---
+
+## Deploy
+
+**Prerequisite:** each client's secret must already exist in Secrets Manager
+(Terraform reads it, it does not create it). For `BDO`:
+`/augusta-nexa-dev/empatia/api/bdo-detalle`.
+
+```bash
+cd environments/dev
+cp terraform.tfvars.example terraform.tfvars     # edit the clients map
+
+terraform init
+terraform validate
+terraform plan
+terraform apply
+```
+
+No secrets are passed to Terraform — it only creates the routing parameters from
+`var.clients` and grants the Lambda read access to the existing secrets.
+
+### Managing values manually (AWS CLI)
+
+```bash
+# Create / rotate a client's credentials (Secrets Manager)
+aws secretsmanager put-secret-value \
+  --secret-id "/augusta-nexa-dev/empatia/api/bdo-detalle" \
+  --secret-string '{"client_id":"Connection.Apis.Auth","client_secret":"REAL_SECRET_HERE","grant_type":"client_credentials","cypher_code":"BASE64_AES256_KEY"}'
+
+# BDO (Banco de Occidente) -> banco_occ routing (normally Terraform-managed)
+aws ssm put-parameter \
+  --name "/augusta-nexa-dev/empatia/api/bdo-detalle" \
+  --type String \
+  --overwrite \
+  --value '{"token_url":"https://login-server-staging.nexabpo.com","token_path":"auth/realms/nexa/protocol/openid-connect/token","api_url":"https://nexa-empatia-staging.nexabpo.com","api_path":"transcription/api/tipificaciones","endpoint_path":"banco_occ","enpoint_cypher_path":"bboc_encrip","bucket_prefix":"external/datanexa/transacciones/empatia/transcripciones/BDO/","secret_name":"empatia/api/bdo-detalle","enabled":true}'
+```
+
+The Lambda caches parameters in memory for `CONFIG_TTL_SECONDS` (default 300s),
+so a manual change is picked up within ~5 minutes without a redeploy.
+
+---
+
+## Adding a new endpoint (e.g. Banco de Bogota)
+
+1. Create the client's secret first (it must exist before `apply`):
+   `/augusta-nexa-dev/empatia/api/bdb-detalle`
+2. Add an entry to the `clients` map in `terraform.tfvars`. The map key is the
+   **S3 folder** and maps to the param/secret `bdb-detalle`:
+   ```hcl
+   BDB = {
+     token_url     = "https://login-server-staging.nexabpo.com"
+     token_path    = "auth/realms/nexa/protocol/openid-connect/token"
+     api_url       = "https://nexa-empatia-staging.nexabpo.com"
+     api_path      = "transcription/api/tipificaciones"
+     endpoint_path = "banco_bogota"
+     enabled       = true
+   }
+   ```
+3. `terraform apply` — creates `/augusta-nexa-dev/empatia/api/bdb-detalle`
+   and extends the EventBridge rule to route the
+   `external/datanexa/transacciones/empatia/transcripciones/BDB/` prefix.
+4. Providers drop files under `.../transcripciones/BDB/...`. **No Lambda change or redeploy.**
+
+---
+
+## Testing the deployed Lambda
+
+See **[TESTING.md](TESTING.md)** for a layer-by-layer guide (direct invoke,
+SQS → Lambda, EventBridge → SQS, full S3 end-to-end, DLQ/failure path, and log
+reading). Quick end-to-end:
+
+```bash
+aws s3 cp ../lambdas/empatia-tipificaciones/sample_payload.json \
+  "s3://augusta-nexa-dev-providers-landing/external/datanexa/transacciones/empatia/transcripciones/BDO/year=2026/month=07/day=13/sample.json"
+```
+
+Console test events live in
+[`../lambdas/empatia-tipificaciones/test_events/`](../lambdas/empatia-tipificaciones/test_events/).
+
+---
+
+## Notes
+
+- `aws_s3_bucket_notification` is **authoritative** for the landing bucket. If it
+  already has notifications managed elsewhere, set `manage_bucket_notification = false`
+  and enable EventBridge in that other config.
+- SQS visibility timeout is 6× the Lambda timeout; the Lambda reports
+  `ReportBatchItemFailures` so only failed records are retried / sent to the DLQ.
+- Poison messages land in the DLQ after `max_receive_count` (default 5) attempts —
+  alarm on the DLQ's `ApproximateNumberOfMessagesVisible`.
