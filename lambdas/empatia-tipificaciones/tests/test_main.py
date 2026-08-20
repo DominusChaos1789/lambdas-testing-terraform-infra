@@ -54,6 +54,7 @@ SOURCE = {
     "trace_id": "b94230fb82d7c03cd6beae12b3288abd",
     "exported_at": "2026-07-23T11:08:09-05:00",
     "turns": 2,
+    "call_status": "No Transfirió",  # an allowed status -> still forwarded
     "messages": [
         {"role": "assistant", "content": "Hola, soy el agente virtual."},
         {"role": "user", "content": "Buenos dias, olvide mi clave."},
@@ -75,9 +76,10 @@ API_BODY = {
     ),
     "fechaInicio": "07/23/2026 11:08:09",  # reformatted from exported_at
     # Fields not in the explicit rename map pass through under their original
-    # names (tenant_id / turns exist in SOURCE but aren't renamed).
+    # names (tenant_id / turns / call_status exist in SOURCE but aren't renamed).
     "tenant_id": "banco_occidente",
     "turns": 2,
+    "call_status": "No Transfirió",
 }
 
 
@@ -564,6 +566,62 @@ def test_process_object_disabled_client(monkeypatch, s3):
 
     main._process_object("bucket", FULL_KEY)
     assert called == []
+
+
+def test_process_object_skips_transferred_call(monkeypatch, ssm, secrets):
+    src = {**SOURCE, "call_status": "Transfirió"}
+    monkeypatch.setattr(
+        main, "_s3", FakeS3({("bucket", FULL_KEY): json.dumps(src).encode()})
+    )
+    monkeypatch.setattr(main, "_get_access_token", lambda url, creds, key: "tok")
+    posted = []
+
+    def fake_post(url, body, tok):
+        posted.append((url, body))
+        return 200, "{}"
+
+    monkeypatch.setattr(main, "_post_json", fake_post)
+    main._process_object("bucket", FULL_KEY)
+    assert posted == []  # never reached the API
+
+
+@pytest.mark.parametrize("status", ["No Transfirió", "Abandonó"])
+def test_process_object_forwards_allowed_call_status(
+    monkeypatch, ssm, secrets, status
+):
+    src = {**SOURCE, "call_status": status}
+    monkeypatch.setattr(
+        main, "_s3", FakeS3({("bucket", FULL_KEY): json.dumps(src).encode()})
+    )
+    monkeypatch.setattr(main, "_get_access_token", lambda url, creds, key: "tok")
+    posted = []
+
+    def fake_post(url, body, tok):
+        posted.append((url, body))
+        return 200, "{}"
+
+    monkeypatch.setattr(main, "_post_json", fake_post)
+    main._process_object("bucket", FULL_KEY)
+    assert posted  # forwarded
+
+
+def test_process_object_forwards_when_call_status_missing(monkeypatch, ssm, secrets):
+    # Older files written before the provider added call_status must not be
+    # silently dropped.
+    src = {k: v for k, v in SOURCE.items() if k != "call_status"}
+    monkeypatch.setattr(
+        main, "_s3", FakeS3({("bucket", FULL_KEY): json.dumps(src).encode()})
+    )
+    monkeypatch.setattr(main, "_get_access_token", lambda url, creds, key: "tok")
+    posted = []
+
+    def fake_post(url, body, tok):
+        posted.append((url, body))
+        return 200, "{}"
+
+    monkeypatch.setattr(main, "_post_json", fake_post)
+    main._process_object("bucket", FULL_KEY)
+    assert posted  # forwarded
 
 
 def test_process_object_rejects_key_outside_bucket_prefix(ssm, s3):

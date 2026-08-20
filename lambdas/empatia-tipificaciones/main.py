@@ -18,7 +18,8 @@ The stored object uses the provider's message structure (a ``messages`` array
 plus flat metadata) and is mapped to the API body by ``_to_api_body`` before
 sending. Per file the Lambda POSTs that body to endpoint_path and, when both
 enpoint_cypher_path and cypher_code are configured, an AES-256-GCM-encrypted copy
-to enpoint_cypher_path. Onboarding a new endpoint is config-only.
+to enpoint_cypher_path. Onboarding a new endpoint is config-only. Objects whose
+``call_status`` is "Transfirió" are skipped -- see ``_SKIP_CALL_STATUSES``.
 """
 
 import base64
@@ -358,6 +359,14 @@ def _cypher_path(client_cfg):
     )
 
 
+# call_status values that must NOT be forwarded to the API: "Transfirió" (the
+# call was transferred) is excluded on purpose -- only "No Transfirió" and
+# "Abandonó" get sent. An object with no call_status at all (e.g. an older file
+# from before the provider added this field) is still forwarded, to avoid
+# silently dropping traffic during the rollout.
+_SKIP_CALL_STATUSES = frozenset({"Transfirió"})
+
+
 def _process_object(bucket, key):
     client_key = _client_key_from_object_key(key)
     client_cfg = _get_client_config(client_key)
@@ -375,7 +384,14 @@ def _process_object(bucket, key):
 
     secret_name = _full_secret_name(client_cfg["secret_name"])
     creds = _get_secret_json(secret_name)
-    body = _to_api_body(_read_s3_json(bucket, key))
+    source = _read_s3_json(bucket, key)
+
+    call_status = source.get("call_status")
+    if call_status in _SKIP_CALL_STATUSES:
+        print(f"Skipping s3://{bucket}/{key}: call_status={call_status!r}")
+        return
+
+    body = _to_api_body(source)
 
     token_url = _join_url(client_cfg["token_url"], client_cfg["token_path"])
     api_base = _join_url(client_cfg["api_url"], client_cfg["api_path"])
